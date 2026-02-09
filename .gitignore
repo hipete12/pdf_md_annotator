@@ -1,0 +1,36 @@
+node_modules/
+dist/
+release/
+*.log
+.DS_Store
+Thumbs.db
+*.pdfmark.tmp
+.env
+.env.local
+coverage/
+test-results/
+playwright-report/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Build artifacts
+*.exe
+*.blockmap
+builder-effective-config.yaml
+builder-debug.yml
+
+# Package manager
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

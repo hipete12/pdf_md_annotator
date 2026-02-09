@@ -1,0 +1,99 @@
+{
+  "name": "pdf-annotator",
+  "version": "1.0.0",
+  "description": "PDF Viewer and Annotator with Markdown and LaTeX support",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "node scripts/dev-runner.js",
+    "build": "node scripts/build.js",
+    "build:main": "webpack --config webpack.main.config.js --mode production",
+    "build:renderer": "webpack --config webpack.renderer.config.js --mode production",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "test": "karma start test/karma.conf.js",
+    "test:e2e": "playwright test",
+    "lint": "eslint --ext .js,.vue src"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@electron/remote": "^2.1.2",
+    "electron-localshortcut": "^3.2.1",
+    "electron-log": "^5.1.1",
+    "electron-store": "^8.1.0",
+    "katex": "^0.16.9",
+    "marked": "^12.0.0",
+    "pdfjs-dist": "^4.0.379",
+    "prismjs": "^1.29.0",
+    "snabbdom": "^3.5.1",
+    "uuid": "^9.0.1",
+    "vue": "^3.4.15",
+    "vuex": "^4.1.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.23.9",
+    "@babel/preset-env": "^7.23.9",
+    "@playwright/test": "^1.41.1",
+    "@vue/compiler-sfc": "^3.4.15",
+    "babel-loader": "^9.1.3",
+    "chai": "^4.4.1",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^6.10.0",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1",
+    "eslint": "^8.56.0",
+    "eslint-plugin-vue": "^9.21.1",
+    "html-webpack-plugin": "^5.6.0",
+    "karma": "^6.4.2",
+    "karma-chai": "^0.1.0",
+    "karma-mocha": "^2.0.1",
+    "karma-webpack": "^5.0.1",
+    "mocha": "^10.2.0",
+    "style-loader": "^3.3.4",
+    "vue-loader": "^17.4.2",
+    "webpack": "^5.90.1",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.0.0",
+    "webpack-merge": "^5.10.0"
+  },
+  "build": {
+    "appId": "com.pdfannotator.app",
+    "productName": "PDF Annotator",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "static/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
+        "to": "pdf.worker.min.mjs"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "static/icons/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "fileAssociations": [
+      {
+        "ext": "pdf",
+        "name": "PDF Document",
+        "description": "PDF Document",
+        "role": "Viewer"
+      }
+    ]
+  }
+}
