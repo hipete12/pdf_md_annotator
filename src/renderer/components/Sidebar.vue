@@ -190,22 +190,59 @@ export default {
       
       renderingThumbnails.value.add(pageNum)
       
+      let page = null
       try {
-        const page = await pdfDocument.value.getPage(pageNum)
+        page = await pdfDocument.value.getPage(pageNum)
         const scale = 0.3
         const viewport = page.getViewport({ scale })
         
-        canvas.width = viewport.width
-        canvas.height = viewport.height
+        // Set canvas size with proper rounding
+        canvas.width = Math.floor(viewport.width)
+        canvas.height = Math.floor(viewport.height)
         
-        const context = canvas.getContext('2d')
-        await page.render({
+        // Ensure canvas has valid dimensions
+        if (canvas.width === 0 || canvas.height === 0) {
+          console.error(`Invalid canvas dimensions for page ${pageNum}: ${canvas.width}x${canvas.height}`)
+          if (page) page.cleanup()
+          return
+        }
+        
+        const context = canvas.getContext('2d', { alpha: false })
+        if (!context) {
+          console.error(`Failed to get 2D context for page ${pageNum} thumbnail`)
+          if (page) page.cleanup()
+          return
+        }
+        
+        // Fill entire canvas with white background FIRST
+        context.save()
+        context.fillStyle = '#ffffff'
+        context.fillRect(0, 0, canvas.width, canvas.height)
+        context.restore()
+        
+        // Render the page
+        const renderTask = page.render({
           canvasContext: context,
-          viewport
-        }).promise
+          viewport: viewport,
+          background: 'white'
+        })
+        
+        await renderTask.promise
+        console.log(`Thumbnail ${pageNum} rendered (${canvas.width}x${canvas.height})`)
       } catch (err) {
         console.error(`Failed to render thumbnail for page ${pageNum}:`, err)
+        // Draw error indicator
+        const context = canvas.getContext('2d')
+        if (context && canvas.width > 0) {
+          context.fillStyle = '#ffeeee'
+          context.fillRect(0, 0, canvas.width, canvas.height)
+          context.fillStyle = '#ff0000'
+          context.font = '12px Arial'
+          context.textAlign = 'center'
+          context.fillText('Error', canvas.width / 2, canvas.height / 2)
+        }
       } finally {
+        if (page) page.cleanup()
         renderingThumbnails.value.delete(pageNum)
       }
     }
@@ -259,7 +296,11 @@ export default {
       }
       visibleThumbnails.value.clear()
       renderingThumbnails.value.clear()
-      renderThumbnails()
+      
+      // Delay thumbnail rendering to let main viewer render first
+      setTimeout(() => {
+        renderThumbnails()
+      }, 2000)
     })
     
     watch(visiblePages, () => {

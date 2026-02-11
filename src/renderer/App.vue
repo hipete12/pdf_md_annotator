@@ -72,18 +72,17 @@ try {
   console.warn('Running outside Electron context')
 }
 
-// Configure PDF.js worker with proper path resolution
+// Configure PDF.js worker path
 if (typeof window !== 'undefined') {
-  // In development, use the node_modules path
-  // In production, use the bundled worker
   const isDev = process.env.NODE_ENV === 'development'
   if (isDev) {
+    // Development: use node_modules path
     pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
       'pdfjs-dist/build/pdf.worker.min.mjs',
       import.meta.url
     ).toString()
   } else {
-    // In production, worker is in resources
+    // Production: worker is bundled in resources
     pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs'
   }
 }
@@ -173,11 +172,27 @@ export default {
           standardFontDataUrl: null,
           stopAtErrors: false, // Continue even if some pages have errors
           isEvalSupported: false,
-          useSystemFonts: true
+          useSystemFonts: true,
+          disableFontFace: false,
+          fontExtraProperties: false,
+          pdfBug: false,
+          maxImageSize: -1, // Allow large images
+          cMapUrl: null,
+          cMapPacked: false
         })
         
         const pdf = await loadingTask.promise
         console.log('PDF loaded, pages:', pdf.numPages)
+        
+        // Verify all pages are accessible
+        for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
+          try {
+            const testPage = await pdf.getPage(i)
+            console.log(`Page ${i} accessible, dimensions: ${testPage.view[2]}x${testPage.view[3]}`)
+          } catch (e) {
+            console.error(`Page ${i} not accessible:`, e)
+          }
+        }
         
         store.commit('SET_PDF_DOCUMENT', { document: pdf, path: filePath })
         

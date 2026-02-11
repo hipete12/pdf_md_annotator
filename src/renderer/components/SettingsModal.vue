@@ -18,7 +18,7 @@
               class="settings-input"
               :value="settings.markdown.fontSize"
               @input="updateSetting('markdown.fontSize', parseInt($event.target.value))"
-              min="8"
+              min="3"
               max="72"
             />
           </div>
@@ -49,6 +49,32 @@
               <option value="'Arial', sans-serif">Arial</option>
               <option value="'Consolas', monospace">Consolas</option>
             </select>
+          </div>
+          
+          <div class="settings-row">
+            <label class="settings-label">List Margin (em)</label>
+            <input 
+              type="number" 
+              class="settings-input"
+              :value="settings.markdown.listMargin || 0.5"
+              @input="updateSetting('markdown.listMargin', parseFloat($event.target.value))"
+              min="0"
+              max="2"
+              step="0.1"
+            />
+          </div>
+          
+          <div class="settings-row">
+            <label class="settings-label">List Item Margin (em)</label>
+            <input 
+              type="number" 
+              class="settings-input"
+              :value="settings.markdown.listItemMargin || 0.25"
+              @input="updateSetting('markdown.listItemMargin', parseFloat($event.target.value))"
+              min="0"
+              max="1"
+              step="0.05"
+            />
           </div>
         </div>
         
@@ -89,6 +115,18 @@
               @input="updateSetting('annotationBox.minWidth', parseInt($event.target.value))"
               min="50"
               max="300"
+            />
+          </div>
+          
+          <div class="settings-row">
+            <label class="settings-label">Content Padding (px)</label>
+            <input 
+              type="number" 
+              class="settings-input"
+              :value="settings.annotationBox.padding || 4"
+              @input="updateSetting('annotationBox.padding', parseInt($event.target.value))"
+              min="0"
+              max="20"
             />
           </div>
           
@@ -269,13 +307,16 @@ export default {
         markdown: {
           fontSize: 14,
           lineHeight: 1.6,
-          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          listMargin: 0.5,
+          listItemMargin: 0.25
         },
         annotationBox: {
           defaultWidth: 300,
           defaultHeight: 200,
           minWidth: 100,
-          minHeight: 50
+          minHeight: 50,
+          padding: 4
         },
         latex: {
           macros: {},
