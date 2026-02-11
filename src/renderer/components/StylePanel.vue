@@ -12,11 +12,12 @@
           type="number" 
           :value="styleConfig.fontSize || 14"
           @input="updateStyle('fontSize', parseInt($event.target.value))"
-          min="8"
+          min="3"
           max="72"
         />
         <span class="style-unit">px</span>
       </div>
+      <!-- Minimum font size reduced to 3px for better flexibility -->
       
       <div class="style-row">
         <label>Line Height</label>

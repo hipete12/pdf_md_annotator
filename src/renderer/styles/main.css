@@ -359,7 +359,7 @@ body {
 }
 
 .annotation-content {
-  padding: var(--annotation-padding, 10px);
+  padding: var(--annotation-padding, 4px);
   overflow: hidden;
   height: 100%;
   width: 100%;
@@ -458,12 +458,12 @@ body {
 
 .markdown-content ul,
 .markdown-content ol {
-  margin: 0.5em 0;
+  margin: var(--list-margin, 0.5em) 0;
   padding-left: 1.5em;
 }
 
 .markdown-content li {
-  margin: 0.25em 0;
+  margin: var(--list-item-margin, 0.25em) 0;
 }
 
 .markdown-content blockquote {
