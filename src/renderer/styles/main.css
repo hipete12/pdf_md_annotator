@@ -250,6 +250,7 @@ body {
 
 .pdf-page-wrapper {
   position: relative;
+  flex: 0 0 auto;
   box-shadow: var(--shadow-lg);
   background: white;
   overflow: visible;

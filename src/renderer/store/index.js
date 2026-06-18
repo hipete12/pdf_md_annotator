@@ -158,6 +158,28 @@ export default createStore({
 
   mutations: {
     SET_PDF_DOCUMENT(state, { document, path }) {
+      // Destroy previous PDF document and additional PDFs to free worker/memory resources.
+      // Only destroy if the object exists and exposes a destroy() method; wrap in try/catch
+      // because destroy can throw if the document was already destroyed or is mid-load.
+      if (state.pdfDocument && typeof state.pdfDocument.destroy === 'function') {
+        try {
+          state.pdfDocument.destroy()
+        } catch (e) {
+          // Best-effort cleanup; ignore errors from already-destroyed documents
+        }
+      }
+      if (state.additionalPdfs) {
+        for (const doc of Object.values(state.additionalPdfs)) {
+          if (doc && typeof doc.destroy === 'function') {
+            try {
+              doc.destroy()
+            } catch (e) {
+              // Best-effort cleanup
+            }
+          }
+        }
+      }
+
       // Use markRaw to prevent Vue's Proxy from wrapping the PDF document
       // PDF.js uses private class fields (#) which don't work through Proxy
       state.pdfDocument = markRaw(document)
