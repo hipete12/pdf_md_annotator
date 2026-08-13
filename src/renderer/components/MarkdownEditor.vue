@@ -374,7 +374,11 @@ export default {
 }
 
 .markdown-preview :deep(li) {
-  margin: 0.15em 0;
+  margin: 0;
+}
+
+.markdown-preview :deep(li p) {
+  margin: 0;
 }
 
 .markdown-preview :deep(ul) {

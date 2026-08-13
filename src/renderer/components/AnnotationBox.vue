@@ -145,10 +145,6 @@ export default {
       const basePadding = store.state.settings?.annotationBox?.padding || 4
       const scaledPadding = basePadding * props.scale
       
-      // Get list margin settings
-      const listMargin = store.state.settings?.markdown?.listMargin || 0.5
-      const listItemMargin = store.state.settings?.markdown?.listItemMargin || 0.25
-      
       return {
         left: `${x * props.scale}px`,
         top: `${y * props.scale}px`,
@@ -161,9 +157,7 @@ export default {
         '--md-font-size': `${scaledFontSize}px`,
         '--md-line-height': props.annotation.style?.lineHeight || 1.6,
         '--md-font-family': props.annotation.style?.fontFamily || 'inherit',
-        '--annotation-padding': `${scaledPadding}px`,
-        '--list-margin': `${listMargin}em`,
-        '--list-item-margin': `${listItemMargin}em`
+        '--annotation-padding': `${scaledPadding}px`
       }
     })
     

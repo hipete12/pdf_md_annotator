@@ -44,9 +44,7 @@ export default createStore({
       markdown: {
         fontSize: 14,
         lineHeight: 1.6,
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        listMargin: 0.5,
-        listItemMargin: 0.25
+        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
       },
       annotationBox: {
         defaultWidth: 300,

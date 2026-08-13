@@ -258,7 +258,13 @@ function openPdfFile(filePath) {
 
 // IPC Handlers
 ipcMain.handle('get-settings', () => {
-  return store.store
+  const settings = store.store
+  // Remove legacy list margin settings (configs removed)
+  if (settings.markdown) {
+    delete settings.markdown.listMargin
+    delete settings.markdown.listItemMargin
+  }
+  return settings
 })
 
 ipcMain.handle('set-settings', (event, settings) => {
