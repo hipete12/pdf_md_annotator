@@ -51,6 +51,10 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useStore } from 'vuex'
 
+function isCancelledError(err) {
+  return err && err.name === 'RenderingCancelledException'
+}
+
 export default {
   name: 'Sidebar',
   
@@ -74,16 +78,49 @@ export default {
     const observer = ref(null) // Intersection Observer
     const renderingThumbnails = ref(new Set()) // Track which thumbnails are currently being rendered
     
+    // Non-reactive render task tracking (pdf.js render tasks should not be reactive)
+    const thumbnailRenderTasks = new Map()
+    
     // Computed
     const pdfDocument = computed(() => store.state.pdfDocument)
     const visiblePages = computed(() => store.getters.visiblePages)
     const selectedPages = computed(() => store.state.selectedPages)
     const currentPage = computed(() => store.state.currentPage)
     
+    // Cancel a single thumbnail render task (best-effort; cancellation errors ignored)
+    const cancelThumbnailRender = (pageNum) => {
+      const task = thumbnailRenderTasks.get(pageNum)
+      if (!task) return
+      try {
+        task.cancel()
+      } catch (e) {
+        // Cancellation is best-effort
+      }
+      // Leave the task entry; renderSingleThumbnail's finally cleans it up by identity
+    }
+    
+    // Cancel all thumbnail render tasks (e.g. on document change or unmount)
+    const cancelAllThumbnailRenders = () => {
+      for (const task of thumbnailRenderTasks.values()) {
+        try {
+          task.cancel()
+        } catch (e) {
+          // Cancellation is best-effort
+        }
+      }
+      // Entries are removed by each render's finally block; clear as a safety net
+      thumbnailRenderTasks.clear()
+      renderingThumbnails.value.clear()
+    }
+    
     // Methods
     const setThumbnailRef = (el, pageNum) => {
       if (el) {
         thumbnailRefs.value[pageNum] = el
+      } else {
+        // Canvas was unmounted (page deleted/reordered out); clean up ref and cancel any render
+        delete thumbnailRefs.value[pageNum]
+        cancelThumbnailRender(pageNum)
       }
     }
     
@@ -186,13 +223,24 @@ export default {
       }
       
       const canvas = thumbnailRefs.value[pageNum]
-      if (!canvas || !pdfDocument.value) return
+      if (!canvas) return
+      
+      // Route through page-source mapping so concatenated pages resolve correctly
+      const source = store.getters.getPageSource(pageNum)
+      if (!source || !source.document) return
       
       renderingThumbnails.value.add(pageNum)
       
       let page = null
+      let renderTask = null
       try {
-        page = await pdfDocument.value.getPage(pageNum)
+        page = await source.document.getPage(source.actualPage)
+        
+        // Re-check after async: page may have scrolled out or document changed
+        if (!visibleThumbnails.value.has(pageNum)) return
+        const currentCanvas = thumbnailRefs.value[pageNum]
+        if (!currentCanvas || currentCanvas !== canvas) return
+        
         const scale = 0.3
         const viewport = page.getViewport({ scale })
         
@@ -203,14 +251,12 @@ export default {
         // Ensure canvas has valid dimensions
         if (canvas.width === 0 || canvas.height === 0) {
           console.error(`Invalid canvas dimensions for page ${pageNum}: ${canvas.width}x${canvas.height}`)
-          if (page) page.cleanup()
           return
         }
         
         const context = canvas.getContext('2d', { alpha: false })
         if (!context) {
           console.error(`Failed to get 2D context for page ${pageNum} thumbnail`)
-          if (page) page.cleanup()
           return
         }
         
@@ -221,64 +267,68 @@ export default {
         context.restore()
         
         // Render the page
-        const renderTask = page.render({
+        renderTask = page.render({
           canvasContext: context,
           viewport: viewport,
           background: 'white'
         })
+        thumbnailRenderTasks.set(pageNum, renderTask)
         
         await renderTask.promise
-        console.log(`Thumbnail ${pageNum} rendered (${canvas.width}x${canvas.height})`)
       } catch (err) {
-        console.error(`Failed to render thumbnail for page ${pageNum}:`, err)
-        // Draw error indicator
-        const context = canvas.getContext('2d')
-        if (context && canvas.width > 0) {
-          context.fillStyle = '#ffeeee'
-          context.fillRect(0, 0, canvas.width, canvas.height)
-          context.fillStyle = '#ff0000'
-          context.font = '12px Arial'
-          context.textAlign = 'center'
-          context.fillText('Error', canvas.width / 2, canvas.height / 2)
+        if (!isCancelledError(err)) {
+          console.error(`Failed to render thumbnail for page ${pageNum}:`, err)
+          // Draw error indicator
+          const context = canvas.getContext('2d')
+          if (context && canvas.width > 0) {
+            context.fillStyle = '#ffeeee'
+            context.fillRect(0, 0, canvas.width, canvas.height)
+            context.fillStyle = '#ff0000'
+            context.font = '12px Arial'
+            context.textAlign = 'center'
+            context.fillText('Error', canvas.width / 2, canvas.height / 2)
+          }
         }
       } finally {
+        // Only delete the task if it's still the same one (avoid clobbering a newer render)
+        if (renderTask && thumbnailRenderTasks.get(pageNum) === renderTask) {
+          thumbnailRenderTasks.delete(pageNum)
+        }
         if (page) page.cleanup()
         renderingThumbnails.value.delete(pageNum)
       }
     }
     
-    // Render thumbnails only for visible pages
-    const renderThumbnails = async () => {
-      if (!pdfDocument.value) return
-      
-      await nextTick()
-      
-      // Setup Intersection Observer if not already set up
-      if (!observer.value) {
-        observer.value = new IntersectionObserver(
-          (entries) => {
-            entries.forEach((entry) => {
-              const pageNum = parseInt(entry.target.dataset.page, 10)
-              if (entry.isIntersecting) {
-                // Thumbnail is visible, render it
-                visibleThumbnails.value.add(pageNum)
-                renderSingleThumbnail(pageNum)
-              } else {
-                // Thumbnail is no longer visible
-                visibleThumbnails.value.delete(pageNum)
-              }
-            })
-          },
-          {
-            root: thumbnailContainer.value,
-            rootMargin: '200px', // Render thumbnails 200px before they come into view
-            threshold: 0.01
-          }
-        )
-      }
-      
-      // Observe all thumbnail elements
-      await nextTick()
+    // Set up the IntersectionObserver (creates once, reused across page-list changes)
+    const setupObserver = () => {
+      if (observer.value) return
+      observer.value = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            const pageNum = parseInt(entry.target.dataset.page, 10)
+            if (entry.isIntersecting) {
+              // Thumbnail is visible, render it
+              visibleThumbnails.value.add(pageNum)
+              renderSingleThumbnail(pageNum)
+            } else {
+              // Thumbnail is no longer visible; cancel any in-flight render
+              visibleThumbnails.value.delete(pageNum)
+              cancelThumbnailRender(pageNum)
+            }
+          })
+        },
+        {
+          root: thumbnailContainer.value,
+          rootMargin: '200px', // Render thumbnails 200px before they come into view
+          threshold: 0.01
+        }
+      )
+    }
+    
+    // Observe all thumbnail elements (idempotent; safe to call on existing elements)
+    const observeThumbnailElements = () => {
+      setupObserver()
+      if (!observer.value) return
       const thumbnailElements = thumbnailContainer.value?.querySelectorAll('.page-thumbnail')
       if (thumbnailElements) {
         thumbnailElements.forEach((el) => {
@@ -287,39 +337,61 @@ export default {
       }
     }
     
-    // Watch for PDF changes
+    // Clean stale thumbnail refs and cancel renders for pages no longer in the page list
+    const cleanStaleThumbnails = () => {
+      const validPages = new Set(visiblePages.value)
+      for (const key of Object.keys(thumbnailRefs.value)) {
+        const pageNum = parseInt(key, 10)
+        if (!validPages.has(pageNum)) {
+          delete thumbnailRefs.value[key]
+          cancelThumbnailRender(pageNum)
+          visibleThumbnails.value.delete(pageNum)
+        }
+      }
+      for (const pageNum of Array.from(thumbnailRenderTasks.keys())) {
+        if (!validPages.has(pageNum)) {
+          cancelThumbnailRender(pageNum)
+        }
+      }
+    }
+    
+    // Watch for PDF document changes
     watch(pdfDocument, () => {
-      // Disconnect old observer
+      // Cancel all in-flight thumbnail renders for the old document
+      cancelAllThumbnailRenders()
+      visibleThumbnails.value.clear()
+      
+      // Old thumbnail refs are stale; clear them so renders don't target unmounted canvases
+      thumbnailRefs.value = {}
+      
+      // Disconnect observer (old elements are gone) but keep the instance for reuse
       if (observer.value) {
         observer.value.disconnect()
-        observer.value = null
       }
-      visibleThumbnails.value.clear()
-      renderingThumbnails.value.clear()
       
-      // Delay thumbnail rendering to let main viewer render first
-      setTimeout(() => {
-        renderThumbnails()
-      }, 2000)
+      // Let IntersectionObserver decide when to render new thumbnails (no artificial delay)
+      nextTick(() => {
+        observeThumbnailElements()
+      })
     })
     
+    // Watch for page list changes (deletion, reorder, concatenation)
     watch(visiblePages, () => {
-      // Re-setup observer when pages change
-      if (observer.value) {
-        observer.value.disconnect()
-        observer.value = null
-      }
+      // Clean stale refs and cancel renders for removed pages
+      cleanStaleThumbnails()
+      // Observe new elements; reuses existing observer (no disconnect/recreate)
       nextTick(() => {
-        renderThumbnails()
+        observeThumbnailElements()
       })
-    }, { deep: true })
+    })
     
     onMounted(() => {
-      renderThumbnails()
+      observeThumbnailElements()
     })
     
     onUnmounted(() => {
-      // Cleanup observer on unmount
+      // Cleanup observer and cancel renders on unmount
+      cancelAllThumbnailRenders()
       if (observer.value) {
         observer.value.disconnect()
         observer.value = null

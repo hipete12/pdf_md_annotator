@@ -113,6 +113,10 @@ export default {
     const store = useStore()
     const pdfViewer = ref(null)
     
+    // Track the in-flight PDF loading task so it can be cancelled if the user
+    // opens another PDF before the current one finishes loading.
+    let currentLoadingTask = null
+    
     // Computed properties
     const pdfDocument = computed(() => store.state.pdfDocument)
     const sidebarVisible = computed(() => store.state.sidebarVisible)
@@ -152,6 +156,16 @@ export default {
     const loadPdf = async (filePath, annotations) => {
       if (!ipcRenderer) return
       try {
+        // If a previous load is still in flight, cancel/destroy it before starting a new one
+        if (currentLoadingTask) {
+          try {
+            currentLoadingTask.destroy()
+          } catch (e) {
+            // Best-effort cleanup; ignore errors from already-settled tasks
+          }
+          currentLoadingTask = null
+        }
+        
         console.log('Loading PDF:', filePath)
         const buffer = await ipcRenderer.invoke('read-pdf-file', filePath)
         if (!buffer) {
@@ -180,19 +194,11 @@ export default {
           cMapUrl: null,
           cMapPacked: false
         })
+        currentLoadingTask = loadingTask
         
         const pdf = await loadingTask.promise
+        if (currentLoadingTask === loadingTask) currentLoadingTask = null
         console.log('PDF loaded, pages:', pdf.numPages)
-        
-        // Verify all pages are accessible
-        for (let i = 1; i <= Math.min(pdf.numPages, 3); i++) {
-          try {
-            const testPage = await pdf.getPage(i)
-            console.log(`Page ${i} accessible, dimensions: ${testPage.view[2]}x${testPage.view[3]}`)
-          } catch (e) {
-            console.error(`Page ${i} not accessible:`, e)
-          }
-        }
         
         store.commit('SET_PDF_DOCUMENT', { document: pdf, path: filePath })
         
@@ -205,6 +211,7 @@ export default {
           }
         }
       } catch (err) {
+        if (currentLoadingTask === loadingTask) currentLoadingTask = null
         console.error('Failed to load PDF:', err)
       }
     }
