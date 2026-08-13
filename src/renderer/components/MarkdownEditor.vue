@@ -367,14 +367,26 @@ export default {
   margin: 0.25em 0;
 }
 
+/* A paragraph directly before a list drops its bottom margin so the
+   text-to-list gap matches single-newline line spacing exactly. */
+.markdown-preview :deep(p:has(+ ul)),
+.markdown-preview :deep(p:has(+ ol)) {
+  margin-bottom: 0;
+}
+
 .markdown-preview :deep(ul),
 .markdown-preview :deep(ol) {
-  margin: 0.25em 0;
+  margin: 0 0 0.25em;
   padding-left: 1.5em;
 }
 
 .markdown-preview :deep(li) {
   margin: 0;
+}
+
+/* Slightly condense spacing between sibling list items. */
+.markdown-preview :deep(li + li) {
+  margin-top: -0.1em;
 }
 
 .markdown-preview :deep(li p) {
