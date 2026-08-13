@@ -184,6 +184,13 @@ export function renderMarkdown(text, options = {}) {
   
   // Step 2: Parse markdown
   let html = marked.parse(text)
+
+  // Strip newlines between HTML tags. marked emits pretty-printed HTML and
+  // the preview uses white-space: pre-wrap, so the literal newlines between
+  // block elements would render as phantom line boxes (doubling the spacing
+  // of lists, paragraphs, tables, etc.). Newlines inside <pre>/<code> text
+  // are untouched; single spaces between inline elements are preserved.
+  html = html.replace(/>\s*\n\s*</g, '><').replace(/\s+$/, '')
   
   // Step 3: Replace placeholders with rendered LaTeX
   // Handle display math placeholders (may have <p>, <br> tags wrapped around)
