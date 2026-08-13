@@ -160,6 +160,25 @@ export function renderMarkdown(text, options = {}) {
   if (!text) return ''
   
   const { latexMacros = {} } = options
+
+  // Normalize empty list markers ("1. ", "- ", "* " with no content yet):
+  // marked falls back to a plain paragraph (or a setext heading for "- ")
+  // when the item has no content, splitting the text into new blocks and
+  // adding a visible gap where there was a tight single line. Append a
+  // zero-width space so they parse as real (empty) list items instead.
+  // Never touches lines inside fenced code blocks.
+  const lines = text.split('\n')
+  let inFence = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence
+    } else if (!inFence && /^( {0,3}(?:[-+*]|\d+\.)[ \t]+)\r?$/.test(line)) {
+      // Insert the ZWSP before any trailing \r so CRLF content still parses
+      lines[i] = line.replace(/[ \t]+(?=\r?$)/, m => m + '\u200b')
+    }
+  }
+  text = lines.join('\n')
   
   // Step 1: Extract LaTeX BEFORE markdown processing to protect from escaping
   const mathBlocks = []
