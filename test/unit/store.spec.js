@@ -461,3 +461,42 @@ describe('Undo / Redo', () => {
     expect(store.state.undoStack[0].annotation.content).to.equal('')
   })
 })
+
+describe('Save As', () => {
+  it('sends the current .pdfmark data to save-pdf-as and marks clean on success', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 2 }, path: '/docs/a.pdf' })
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 1, y: 2 })
+    expect(store.state.isDirty).to.be.true
+
+    const result = await store.dispatch('savePdfmarkAs')
+
+    const call = ipc.calls.find(c => c.channel === 'save-pdf-as')
+    expect(call.payload.sourcePdfPath).to.equal('/docs/a.pdf')
+    expect(call.payload.data.annotations[1]).to.have.length(1)
+    expect(call.payload.data.pageOrder).to.deep.equal([1, 2])
+    expect(call.payload.data.created).to.be.a('string')
+    expect(result.success).to.be.true
+    expect(store.state.isDirty).to.be.false
+  })
+
+  it('stays dirty when the dialog is cancelled', async () => {
+    const ipc = createMockIpc()
+    ipc.invoke = () => Promise.resolve({ success: false, cancelled: true })
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 1, y: 2 })
+
+    const result = await store.dispatch('savePdfmarkAs')
+    expect(result.cancelled).to.be.true
+    expect(store.state.isDirty).to.be.true
+  })
+
+  it('does nothing when no PDF is open', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    expect(await store.dispatch('savePdfmarkAs')).to.be.null
+    expect(ipc.calls).to.have.length(0)
+  })
+})

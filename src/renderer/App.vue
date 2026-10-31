@@ -253,6 +253,10 @@ export default {
       store.dispatch('savePdfmark', { commit: true })
     }
     
+    const handleSaveFileAs = () => {
+      store.dispatch('savePdfmarkAs')
+    }
+    
     const handleToggleSidebar = () => {
       toggleSidebar()
     }
@@ -271,6 +275,7 @@ export default {
       if (ipcRenderer) {
         ipcRenderer.on('open-pdf', handleOpenPdf)
         ipcRenderer.on('save-file', handleSaveFile)
+        ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
         ipcRenderer.on('zoom-in', handleZoomIn)
         ipcRenderer.on('zoom-out', handleZoomOut)
@@ -291,6 +296,7 @@ export default {
       if (ipcRenderer) {
         ipcRenderer.removeListener('open-pdf', handleOpenPdf)
         ipcRenderer.removeListener('save-file', handleSaveFile)
+        ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
         ipcRenderer.removeListener('zoom-in', handleZoomIn)
         ipcRenderer.removeListener('zoom-out', handleZoomOut)

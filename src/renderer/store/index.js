@@ -24,6 +24,31 @@ function debounce(fn, delay) {
 }
 
 /**
+ * Build the JSON-serializable .pdfmark contents for the current state
+ * (a plain copy avoids "An object could not be cloned" errors over IPC).
+ * Records the creation time on the first save of a new .pdfmark.
+ */
+function snapshotPdfmark(state, commit) {
+  const now = new Date().toISOString()
+  if (!state.pdfmarkCreated) commit('SET_PDFMARK_CREATED', now)
+
+  return clone({
+    version: state.pdfmarkVersion,
+    pdfPath: state.pdfPath,
+    created: state.pdfmarkCreated,
+    modified: now,
+    annotations: state.annotations,
+    pageOrder: state.pageOrder,
+    deletedPages: state.deletedPages,
+    concatenatedPdfs: state.concatenatedPdfs,
+    settings: {
+      markdown: state.settings.markdown,
+      latex: state.settings.latex
+    }
+  })
+}
+
+/**
  * Create a new store instance. Tests pass a fake ipcRenderer; the app uses the
  * default store exported below.
  */
@@ -481,25 +506,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       async savePdfmark({ state, commit }, { commit: commitFile = true } = {}) {
         if (!state.pdfPath || !ipcRenderer) return
       
-        const now = new Date().toISOString()
-        if (!state.pdfmarkCreated) commit('SET_PDFMARK_CREATED', now)
-      
-        // Create a plain JSON-serializable copy of the data
-        // This avoids "An object could not be cloned" errors with IPC
-        const data = JSON.parse(JSON.stringify({
-          version: state.pdfmarkVersion,
-          pdfPath: state.pdfPath,
-          created: state.pdfmarkCreated,
-          modified: now,
-          annotations: state.annotations,
-          pageOrder: state.pageOrder,
-          deletedPages: state.deletedPages,
-          concatenatedPdfs: state.concatenatedPdfs,
-          settings: {
-            markdown: state.settings.markdown,
-            latex: state.settings.latex
-          }
-        }))
+        const data = snapshotPdfmark(state, commit)
       
         try {
           await ipcRenderer.invoke('save-pdfmark', {
@@ -515,6 +522,27 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           }
         } catch (err) {
           console.error('Failed to save .pdfmark:', err)
+        }
+      },
+    
+      // Save As: the main process asks for a new .pdf path, copies the PDF
+      // there, writes the matching .pdfmark and reopens the app on the copy.
+      // Resolves to the IPC result ({ success, cancelled, pdfPath, error }).
+      async savePdfmarkAs({ state, commit }) {
+        if (!state.pdfPath || !ipcRenderer) return null
+      
+        const data = snapshotPdfmark(state, commit)
+      
+        try {
+          const result = await ipcRenderer.invoke('save-pdf-as', {
+            sourcePdfPath: state.pdfPath,
+            data
+          })
+          if (result && result.success) commit('MARK_CLEAN')
+          return result
+        } catch (err) {
+          console.error('Failed to save as:', err)
+          return { success: false, error: err.message }
         }
       },
     

@@ -300,6 +300,40 @@ ipcMain.handle('commit-pdfmark', async (event, { pdfPath }) => {
   }
 })
 
+// Save As: copy the PDF to a new location and write its .pdfmark next to it,
+// then switch the window to the copy. Annotations are tied to "<name>.pdfmark"
+// beside the PDF, so saving only the .pdfmark elsewhere would not reload.
+ipcMain.handle('save-pdf-as', async (event, { sourcePdfPath, data }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save PDF and Annotations As',
+    defaultPath: sourcePdfPath,
+    filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
+  })
+  if (result.canceled || !result.filePath) {
+    return { success: false, cancelled: true }
+  }
+
+  let targetPdfPath = path.resolve(result.filePath)
+  if (!/\.pdf$/i.test(targetPdfPath)) targetPdfPath += '.pdf'
+  const pdfmarkPath = targetPdfPath.replace(/\.pdf$/i, '.pdfmark')
+  const tempPath = pdfmarkPath + '.tmp'
+
+  try {
+    if (targetPdfPath !== path.resolve(sourcePdfPath)) {
+      fs.copyFileSync(sourcePdfPath, targetPdfPath)
+    }
+    fs.writeFileSync(tempPath, JSON.stringify({ ...data, pdfPath: targetPdfPath }, null, 2), 'utf8')
+    fs.renameSync(tempPath, pdfmarkPath)
+  } catch (err) {
+    log.error('Save As failed:', err)
+    dialog.showErrorBox('Save As Failed', err.message)
+    return { success: false, error: err.message }
+  }
+
+  openPdfFile(targetPdfPath)
+  return { success: true, pdfPath: targetPdfPath, pdfmarkPath }
+})
+
 ipcMain.handle('open-file-dialog', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile'],

@@ -138,6 +138,7 @@ export const IPC_CHANNELS = {
   OPEN_PDF: 'open-pdf',
   SAVE_FILE: 'save-file',
   SAVE_FILE_AS: 'save-file-as',
+  SAVE_PDF_AS: 'save-pdf-as',
   TOGGLE_SIDEBAR: 'toggle-sidebar',
   ZOOM_IN: 'zoom-in',
   ZOOM_OUT: 'zoom-out',
