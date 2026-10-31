@@ -173,6 +173,10 @@ API keys are encrypted with the OS keychain (Electron `safeStorage`) and never l
 the main process. On Linux without a keyring (GNOME Keyring / KWallet) the key is only
 obfuscated; the settings page warns about this.
 
+**Model per session.** The model button under the chat box picks the provider and model
+for the current session; it is remembered with that session (also after a restart) until
+changed. New sessions start with the default model from Settings.
+
 **Context.** Every request includes the document text page by page (`[Page N]`). If it is
 larger than the *document text budget*, only the pages nearest the attached context and the
 page in view are sent. Selecting text in the PDF, or clicking a note, shows a dashed chip

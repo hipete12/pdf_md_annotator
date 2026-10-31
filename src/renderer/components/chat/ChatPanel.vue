@@ -219,7 +219,7 @@
           v-model="draft"
           class="chat-input"
           rows="1"
-          :placeholder="hasModel ? 'Ask about this document…' : 'Set up a model in Settings first'"
+          :placeholder="hasModel ? 'Ask about this document…' : 'Choose a model below or in Settings'"
           :disabled="!hasModel"
           @input="autoGrow"
           @keydown.enter.exact.prevent="send()"
@@ -274,17 +274,13 @@
         </button>
       </div>
       <div class="chat-meta">
+        <ChatModelPicker :disabled="isStreaming" />
         <span
           v-if="status"
           class="chat-status"
         >{{ status }}</span>
         <span
-          v-else-if="modelId"
-          class="chat-model"
-          :title="modelId"
-        >{{ modelId }}</span>
-        <span
-          v-if="lastRequest"
+          v-else-if="lastRequest"
           class="chat-tokens"
           :class="tokenLevel"
           :title="tokenTitle"
@@ -302,6 +298,7 @@ import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useStore } from 'vuex'
 import ChatMessage from './ChatMessage.vue'
 import ChatSessionList from './ChatSessionList.vue'
+import ChatModelPicker from './ChatModelPicker.vue'
 import { describePageRanges } from '../../utils/chatPrompt'
 
 const MIN_WIDTH = 300
@@ -310,7 +307,7 @@ const DEFAULT_WIDTH = 420
 export default {
   name: 'ChatPanel',
 
-  components: { ChatMessage, ChatSessionList },
+  components: { ChatMessage, ChatSessionList, ChatModelPicker },
 
   emits: ['close', 'open-settings'],
 
@@ -333,8 +330,8 @@ export default {
     const notice = computed(() => chat.value.notice)
     const lastRequest = computed(() => chat.value.lastRequest)
 
-    const llm = computed(() => store.state.settings.llm)
-    const modelId = computed(() => llm.value.models?.[llm.value.provider] || '')
+    // Session's own model if chosen, else the default from Settings
+    const modelId = computed(() => store.getters['chat/sessionModel'].model)
     const hasModel = computed(() => Boolean(modelId.value))
     const documentTitle = computed(() => String(store.state.pdfPath || 'this document').split(/[\\/]/).pop())
 
@@ -564,10 +561,7 @@ export default {
       return `${n}`
     }
     // Context window of the selected model, when the provider reports it
-    const contextLength = computed(() => {
-      const model = (store.state.llmModels[llm.value.provider] || []).find(m => m.id === modelId.value)
-      return model?.contextLength || null
-    })
+    const contextLength = computed(() => store.getters['chat/sessionModelInfo']?.contextLength || null)
     const tokenLevel = computed(() => {
       if (!lastRequest.value || !contextLength.value) return ''
       const ratio = lastRequest.value.estimatedTokens / contextLength.value

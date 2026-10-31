@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom } from '../utils/chatPrompt'
 import { extractDocumentPages } from '../utils/documentText'
 import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
-import { resolveVisionSupport } from '../../common/llm'
+import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
 
 export const PDFCHAT_VERSION = '1.0.0'
 
@@ -36,6 +36,9 @@ export function sanitizeSessions(data) {
       modified: s.modified || s.created || now(),
       // null: follow the "Send page images" setting; true/false: per-session override
       visionEnabled: typeof s.visionEnabled === 'boolean' ? s.visionEnabled : null,
+      // Model chosen for this session; null follows the default from Settings
+      provider: typeof s.provider === 'string' && LLM_PROVIDERS[s.provider] ? s.provider : null,
+      model: typeof s.model === 'string' && s.model ? s.model : null,
       messages: s.messages
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => ({ ...m, contexts: Array.isArray(m.contexts) ? m.contexts : [], pending: false }))
@@ -66,12 +69,25 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
     getters: {
       activeSession: (state) => findSession(state, state.activeSessionId),
       // true / false / null (unknown) for the selected model
-      modelVision: (state, getters, rootState) => {
+      // Provider + model for the active session: its own choice, else the
+      // default from Settings. isDefault tells the UI which one applies.
+      sessionModel: (state, getters, rootState) => {
         const llm = rootState.settings.llm
-        const modelId = llm.models?.[llm.provider] || ''
-        if (!modelId) return null
-        const model = (rootState.llmModels[llm.provider] || []).find(m => m.id === modelId)
-        return resolveVisionSupport(model, llm.visionOverrides, modelId)
+        const session = getters.activeSession
+        if (session?.provider && session?.model) {
+          return { providerId: session.provider, model: session.model, isDefault: false }
+        }
+        return { providerId: llm.provider, model: llm.models?.[llm.provider] || '', isDefault: true }
+      },
+      // Model entry (from the loaded model list) for the active session, if known
+      sessionModelInfo: (state, getters, rootState) => {
+        const { providerId, model } = getters.sessionModel
+        return (rootState.llmModels[providerId] || []).find(m => m.id === model) || null
+      },
+      modelVision: (state, getters, rootState) => {
+        const { model } = getters.sessionModel
+        if (!model) return null
+        return resolveVisionSupport(getters.sessionModelInfo, rootState.settings.llm.visionOverrides, model)
       },
       // Whether the next message in the active session will include page images
       imagesEnabled: (state, getters, rootState) => {
@@ -106,6 +122,12 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       },
       SET_ACTIVE(state, id) {
         state.activeSessionId = id
+      },
+      SET_SESSION_MODEL(state, { id, providerId, model }) {
+        const session = findSession(state, id)
+        if (!session) return
+        session.provider = providerId || null
+        session.model = providerId && model ? model : null
       },
       SET_SESSION_VISION(state, { id, value }) {
         const session = findSession(state, id)
@@ -206,7 +228,16 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       newSession({ commit, getters }) {
         // Reuse an untouched session instead of piling up empty ones
         if (getters.activeSession && getters.activeSession.messages.length === 0) return getters.activeSession.id
-        const session = { id: uuidv4(), title: 'New chat', created: now(), modified: now(), visionEnabled: null, messages: [] }
+        const session = {
+          id: uuidv4(),
+          title: 'New chat',
+          created: now(),
+          modified: now(),
+          visionEnabled: null,
+          provider: null,
+          model: null,
+          messages: []
+        }
         commit('ADD_SESSION', session)
         return session.id
       },
@@ -228,12 +259,11 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         return dispatch('persist')
       },
 
-      async sendMessage({ commit, dispatch, state, getters, rootState }, { text }) {
+      async sendMessage({ commit, dispatch, state, getters }, { text }) {
         const input = String(text || '').trim()
         if (state.streaming || (!input && state.attachedContexts.length === 0)) return false
 
-        const llm = rootState.settings.llm
-        if (!llm.models?.[llm.provider]) {
+        if (!getters.sessionModel.model) {
           commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
           return false
         }
@@ -265,8 +295,9 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const history = session.messages.slice(0, index)
 
         const llm = rootState.settings.llm
-        const providerId = llm.provider
-        const model = llm.models?.[providerId] || ''
+        // The session's own model when chosen, else the Settings default
+        const providerId = session.provider && session.model ? session.provider : llm.provider
+        const model = session.provider && session.model ? session.model : (llm.models?.[llm.provider] || '')
 
         const assistantMessage = {
           id: uuidv4(),
@@ -399,6 +430,28 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           requestId: streaming.requestId,
           error: { code: 'aborted', message: 'Stopped' }
         })
+      },
+
+      // Choose the model for the active session (null/empty = Settings default).
+      // Remembered with the session until changed.
+      async setSessionModel({ commit, getters, dispatch }, { providerId = null, model = null } = {}) {
+        let session = getters.activeSession
+        if (!session) {
+          await dispatch('newSession')
+          session = getters.activeSession
+        }
+        commit('SET_SESSION_MODEL', { id: session.id, providerId, model })
+        if (session.messages.length) return dispatch('persist')
+      },
+
+      // Fetch (and cache in the root store) the model list of a provider
+      async loadModels({ commit, rootState }, providerId) {
+        if (!ipcRenderer) return { success: false, error: 'Not running in the desktop app' }
+        const provider = LLM_PROVIDERS[providerId]
+        const baseUrl = rootState.settings.llm.baseUrls?.[providerId] ?? provider?.baseUrl
+        const result = await ipcRenderer.invoke('llm:list-models', { providerId, baseUrl })
+        if (result?.success) commit('SET_LLM_MODELS', { providerId, models: result.models }, { root: true })
+        return result
       },
 
       // Turn page images on/off for the active session

@@ -230,6 +230,73 @@ describe('Chat store', () => {
   })
 })
 
+describe('Per-session model', () => {
+  it('uses the Settings default until the session picks its own model', async () => {
+    const { store, ipc } = await setup()
+    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'custom', model: 'test-model', isDefault: true })
+
+    await store.dispatch('chat/setSessionModel', { providerId: 'opencodego', model: 'kimi-k3' })
+    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'opencodego', model: 'kimi-k3', isDefault: false })
+
+    await store.dispatch('chat/sendMessage', { text: 'hi' })
+    const start = ipc.lastCall('llm:chat-start').payload
+    expect(start).to.include({ providerId: 'opencodego', model: 'kimi-k3' })
+    expect(start.baseUrl).to.equal('https://opencode.ai/inference/go/openai/v1')
+    expect(store.getters['chat/activeSession'].messages[1].model).to.equal('kimi-k3')
+  })
+
+  it('is remembered with the session and survives a reload and Settings changes', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/setSessionModel', { providerId: 'openai', model: 'gpt-4o' })
+    await store.dispatch('chat/sendMessage', { text: 'first' })
+    ipc.emit('llm:chat-done', { requestId: ipc.lastCall('llm:chat-start').payload.requestId })
+    await tick()
+
+    const saved = ipc.lastCall('chat:save').payload.data
+    expect(saved.sessions[0]).to.include({ provider: 'openai', model: 'gpt-4o' })
+
+    // a second session follows the default
+    await store.dispatch('chat/newSession')
+    expect(store.getters['chat/sessionModel'].model).to.equal('test-model')
+
+    // changing the default does not affect the first session
+    store.commit('SET_SETTING', { path: 'llm.models', value: { custom: 'other-default' } })
+    await store.dispatch('chat/selectSession', saved.sessions[0].id)
+    expect(store.getters['chat/sessionModel']).to.include({ providerId: 'openai', model: 'gpt-4o' })
+
+    // reopening the PDF restores it from the .pdfchat file
+    ipc.handlers['chat:load'] = () => ({ success: true, data: saved })
+    store.commit('SET_PDF_DOCUMENT', { document: fakePdf(['x']), path: '/docs/paper.pdf' })
+    await tick(); await tick()
+    expect(store.getters['chat/sessionModel']).to.include({ providerId: 'openai', model: 'gpt-4o', isDefault: false })
+  })
+
+  it('can go back to the default and ignores unknown providers in files', async () => {
+    const { store } = await setup()
+    await store.dispatch('chat/setSessionModel', { providerId: 'openai', model: 'gpt-4o' })
+    await store.dispatch('chat/setSessionModel', { providerId: null, model: null })
+    expect(store.getters['chat/sessionModel'].isDefault).to.equal(true)
+    const [session] = sanitizeSessions({ sessions: [{ id: 'a', provider: 'nope', model: 'm', messages: [] }] })
+    expect(session.provider).to.equal(null)
+  })
+
+  it('loads and caches model lists per provider; vision follows the session model', async () => {
+    const { store, ipc } = await setup()
+    ipc.handlers['llm:list-models'] = ({ providerId }) => ({
+      success: true,
+      models: providerId === 'openai' ? [{ id: 'gpt-4o', vision: true }] : []
+    })
+    const result = await store.dispatch('chat/loadModels', 'openai')
+    expect(result.success).to.equal(true)
+    expect(ipc.lastCall('llm:list-models').payload).to.deep.equal({ providerId: 'openai', baseUrl: 'https://api.openai.com/v1' })
+    expect(store.state.llmModels.openai).to.have.length(1)
+
+    expect(store.getters['chat/modelVision']).to.equal(null) // test-model: unknown
+    await store.dispatch('chat/setSessionModel', { providerId: 'openai', model: 'gpt-4o' })
+    expect(store.getters['chat/modelVision']).to.equal(true)
+  })
+})
+
 describe('Context chips', () => {
   it('attaches pending contexts once, ignoring duplicates', async () => {
     const { store } = await setup()
