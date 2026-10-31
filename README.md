@@ -64,21 +64,49 @@ npm run dist
 
 `npm run dist:linux` produces `dist/pdf-annotator-<version>-x86_64.AppImage`.
 
-To run the AppImage on Ubuntu 24.04+:
+The AppImage automatically detects whether unprivileged user namespaces are available.
+On systems that allow them (for example stock Fedora), Electron runs with its sandbox
+enabled. On systems that restrict them (for example Ubuntu 23.10+ / 24.04, where AppArmor
+restricts unprivileged user namespaces by default), it prints a short notice to stderr and
+automatically falls back to `--no-sandbox`. This means the AppImage should just work:
 
 ```bash
-sudo apt install libfuse2t64
 chmod +x dist/pdf-annotator-*.AppImage
 ./dist/pdf-annotator-*.AppImage
 ```
 
-If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1 ./dist/pdf-annotator-*.AppImage`.
-On distributions that restrict unprivileged user namespaces (for example Ubuntu 24.04 AppArmor),
-the app may need `--no-sandbox`:
+On Ubuntu 24.04+, install the FUSE 2 runtime first:
+
+```bash
+sudo apt install libfuse2t64
+```
+
+If FUSE is unavailable, run the AppImage with
+`APPIMAGE_EXTRACT_AND_RUN=1 ./dist/pdf-annotator-*.AppImage`. This only works around FUSE
+mount problems, not sandbox errors.
+
+`--no-sandbox` remains available as an explicit manual override:
 
 ```bash
 ./dist/pdf-annotator-*.AppImage --no-sandbox
 ```
+
+### Fedora
+
+The legacy AppImage runtime needs FUSE 2. On Fedora, install it with:
+
+```bash
+sudo dnf install fuse fuse-libs
+```
+
+There is no `libfuse2` package name on Fedora. Normal Fedora Workstation installations
+usually already include these packages; minimal installations may also need:
+
+```bash
+sudo dnf install gtk3 nss alsa-lib libnotify libXScrnSaver libXtst at-spi2-core xdg-utils mesa-libgbm libdrm cups-libs libxkbcommon libsecret
+```
+
+Stock Fedora allows unprivileged user namespaces, so the Electron sandbox stays enabled.
 
 The AppImage contains a desktop entry and PDF MIME association, but automatic registration
 requires [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) or `appimaged`.

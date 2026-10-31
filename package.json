@@ -64,6 +64,7 @@
     "directories": {
       "output": "dist"
     },
+    "afterPack": "scripts/afterPack.js",
     "files": [
       "app-build/**/*",
       "static/**/*"
@@ -90,6 +91,7 @@
       "category": "Office",
       "icon": "static/icons",
       "executableName": "pdf-annotator",
+      "executableArgs": ["--sandbox-auto"],
       "synopsis": "PDF viewer and annotator with Markdown and LaTeX support",
       "description": "View and annotate PDFs with Markdown and LaTeX support.",
       "desktop": {
