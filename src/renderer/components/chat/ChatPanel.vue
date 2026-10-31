@@ -1,0 +1,769 @@
+<template>
+  <aside
+    class="chat-panel"
+    :class="{ fullscreen, resizing }"
+    :style="fullscreen ? null : { width: `${width}px` }"
+    aria-label="Chat"
+  >
+    <div
+      v-if="!fullscreen"
+      class="chat-resizer"
+      title="Drag to resize"
+      @mousedown.prevent="startResize"
+      @dblclick="resetWidth"
+    />
+
+    <header class="chat-header">
+      <button
+        class="chat-session-toggle"
+        :class="{ open: showSessions }"
+        title="Sessions"
+        @click="showSessions = !showSessions"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        ><path d="M2.5 4h11M2.5 8h11M2.5 12h7" /></svg>
+        <span class="chat-session-name">{{ activeSession ? activeSession.title : 'New chat' }}</span>
+        <svg
+          class="chat-caret"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        ><path d="M4.5 6.5L8 10l3.5-3.5" /></svg>
+      </button>
+
+      <div class="chat-header-actions">
+        <button
+          class="chat-icon-btn"
+          title="New session"
+          @click="newSession"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M8 3.5v9M3.5 8h9" /></svg>
+        </button>
+        <button
+          class="chat-icon-btn"
+          :title="fullscreen ? 'Exit full screen (Esc)' : 'Full screen'"
+          @click="toggleFullscreen"
+        >
+          <svg
+            v-if="!fullscreen"
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M3 6.5V3h3.5M13 6.5V3H9.5M3 9.5V13h3.5M13 9.5V13H9.5" /></svg>
+          <svg
+            v-else
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M6.5 3v3.5H3M9.5 3v3.5H13M6.5 13V9.5H3M9.5 13V9.5H13" /></svg>
+        </button>
+        <button
+          class="chat-icon-btn"
+          title="Close chat (Ctrl+Shift+L)"
+          @click="$emit('close')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M4 4l8 8M12 4l-8 8" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <ChatSessionList
+      v-if="showSessions"
+      :sessions="sortedSessions"
+      :active-id="activeSessionId"
+      @select="selectSession"
+      @new="newSession"
+      @rename="renameSession"
+      @delete="deleteSession"
+    />
+
+    <div
+      ref="scroller"
+      class="chat-messages"
+      @scroll="onScroll"
+    >
+      <div class="chat-messages-inner">
+        <!-- Empty states -->
+        <div
+          v-if="!hasModel"
+          class="chat-empty"
+        >
+          <p class="chat-empty-title">
+            Connect a model to start chatting
+          </p>
+          <p class="chat-empty-text">
+            Use OpenRouter, OpenAI, a local Ollama or LM Studio server, or any OpenAI-compatible API.
+          </p>
+          <button
+            class="btn btn-primary"
+            @click="$emit('open-settings')"
+          >
+            Open AI settings
+          </button>
+        </div>
+        <div
+          v-else-if="messages.length === 0"
+          class="chat-empty"
+        >
+          <p class="chat-empty-title">
+            Ask about {{ documentTitle }}
+          </p>
+          <p class="chat-empty-text">
+            The document's text is included automatically. Select text or click a note to attach it as context.
+          </p>
+          <div class="chat-suggestions">
+            <button
+              v-for="suggestion in suggestions"
+              :key="suggestion"
+              class="chat-suggestion"
+              @click="send(suggestion)"
+            >
+              {{ suggestion }}
+            </button>
+          </div>
+        </div>
+
+        <ChatMessage
+          v-for="(message, index) in messages"
+          :key="message.id"
+          :message="message"
+          :is-last="index === messages.length - 1"
+          @retry="retry"
+          @open-context="openContext"
+        />
+      </div>
+    </div>
+
+    <div
+      v-if="notice"
+      class="chat-notice"
+    >
+      <span>{{ notice }}</span>
+      <button
+        class="chat-notice-close"
+        title="Dismiss"
+        @click="dismissNotice"
+      >
+        ×
+      </button>
+    </div>
+
+    <footer class="chat-composer">
+      <div
+        class="chat-input-wrap"
+        :class="{ disabled: !hasModel }"
+      >
+        <textarea
+          ref="input"
+          v-model="draft"
+          class="chat-input"
+          rows="1"
+          :placeholder="hasModel ? 'Ask about this document…' : 'Set up a model in Settings first'"
+          :disabled="!hasModel"
+          @input="autoGrow"
+          @keydown.enter.exact.prevent="send()"
+        />
+        <button
+          v-if="isStreaming"
+          class="chat-send stop"
+          title="Stop generating"
+          @click="stop"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><rect
+            x="4.5"
+            y="4.5"
+            width="7"
+            height="7"
+            rx="1"
+          /></svg>
+        </button>
+        <button
+          v-else
+          class="chat-send"
+          title="Send (Enter)"
+          :disabled="!canSend"
+          @click="send()"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M8 13V3.5M3.5 8L8 3.5 12.5 8" /></svg>
+        </button>
+      </div>
+      <div class="chat-meta">
+        <span
+          v-if="status"
+          class="chat-status"
+        >{{ status }}</span>
+        <span
+          v-else-if="modelId"
+          class="chat-model"
+          :title="modelId"
+        >{{ modelId }}</span>
+        <span
+          v-if="lastRequest"
+          class="chat-tokens"
+          :title="tokenTitle"
+        >
+          ~{{ formatTokens(lastRequest.estimatedTokens) }} tokens{{ lastRequest.truncated ? ' · partial document' : '' }}
+        </span>
+        <span class="chat-hint">Shift+Enter for a new line</span>
+      </div>
+    </footer>
+  </aside>
+</template>
+
+<script>
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { useStore } from 'vuex'
+import ChatMessage from './ChatMessage.vue'
+import ChatSessionList from './ChatSessionList.vue'
+import { describePageRanges } from '../../utils/chatPrompt'
+
+const MIN_WIDTH = 300
+const DEFAULT_WIDTH = 420
+
+export default {
+  name: 'ChatPanel',
+
+  components: { ChatMessage, ChatSessionList },
+
+  emits: ['close', 'open-settings'],
+
+  setup() {
+    const store = useStore()
+    const scroller = ref(null)
+    const input = ref(null)
+    const draft = ref('')
+    const showSessions = ref(false)
+    const stickToBottom = ref(true)
+
+    const chat = computed(() => store.state.chat)
+    const activeSession = computed(() => store.getters['chat/activeSession'])
+    const activeSessionId = computed(() => chat.value.activeSessionId)
+    const sortedSessions = computed(() => store.getters['chat/sortedSessions'])
+    const messages = computed(() => activeSession.value?.messages || [])
+    const isStreaming = computed(() => store.getters['chat/isStreaming'])
+    const fullscreen = computed(() => chat.value.fullscreen)
+    const status = computed(() => chat.value.status)
+    const notice = computed(() => chat.value.notice)
+    const lastRequest = computed(() => chat.value.lastRequest)
+
+    const llm = computed(() => store.state.settings.llm)
+    const modelId = computed(() => llm.value.models?.[llm.value.provider] || '')
+    const hasModel = computed(() => Boolean(modelId.value))
+    const documentTitle = computed(() => String(store.state.pdfPath || 'this document').split(/[\\/]/).pop())
+
+    const canSend = computed(() => hasModel.value && !isStreaming.value &&
+      (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
+
+    const suggestions = [
+      'Summarize this document',
+      'Explain the key ideas on the current page',
+      'What are the main conclusions?'
+    ]
+
+    // --- Sending -----------------------------------------------------------
+    const autoGrow = () => {
+      const el = input.value
+      if (!el) return
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 200)}px`
+    }
+
+    const send = async (text) => {
+      const content = text ?? draft.value
+      if (!hasModel.value || isStreaming.value) return
+      if (!content.trim() && chat.value.attachedContexts.length === 0) return
+      if (text === undefined) {
+        draft.value = ''
+        await nextTick()
+        autoGrow()
+      }
+      stickToBottom.value = true
+      await store.dispatch('chat/sendMessage', { text: content })
+    }
+
+    const stop = () => store.dispatch('chat/stop')
+    const retry = () => {
+      stickToBottom.value = true
+      store.dispatch('chat/retry')
+    }
+    const dismissNotice = () => store.commit('chat/SET_NOTICE', '')
+
+    // --- Sessions ----------------------------------------------------------
+    const newSession = async () => {
+      if (isStreaming.value) await stop()
+      await store.dispatch('chat/newSession')
+      showSessions.value = false
+      input.value?.focus()
+    }
+    const selectSession = (id) => {
+      store.dispatch('chat/selectSession', id)
+      showSessions.value = false
+      stickToBottom.value = true
+      scrollToBottom()
+    }
+    const renameSession = (payload) => store.dispatch('chat/renameSession', payload)
+    const deleteSession = (id) => store.dispatch('chat/deleteSession', id)
+
+    // Jump back to where an attached context came from
+    const openContext = (context) => {
+      if (context.pageId) store.commit('SET_CURRENT_PAGE', context.pageId)
+      if (context.kind === 'note' && context.noteId) store.dispatch('selectAnnotation', context.noteId)
+      if (fullscreen.value) store.dispatch('chat/setFullscreen', false)
+    }
+
+    // --- Scrolling ---------------------------------------------------------
+    const scrollToBottom = () => nextTick(() => {
+      const el = scroller.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+
+    const onScroll = () => {
+      const el = scroller.value
+      if (!el) return
+      stickToBottom.value = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    }
+
+    // Follow streaming output unless the user scrolled up to read
+    watch(
+      () => {
+        const last = messages.value[messages.value.length - 1]
+        return [messages.value.length, last?.content.length, last?.reasoning?.length, last?.error]
+      },
+      () => { if (stickToBottom.value) scrollToBottom() }
+    )
+    watch(activeSessionId, scrollToBottom)
+
+    // --- Full screen -------------------------------------------------------
+    const toggleFullscreen = () => store.dispatch('chat/setFullscreen', !fullscreen.value)
+
+    // --- Resizing ----------------------------------------------------------
+    const width = ref(store.state.settings.chat.panelWidth || DEFAULT_WIDTH)
+    const resizing = ref(false)
+    watch(() => store.state.settings.chat.panelWidth, (value) => {
+      if (!resizing.value && value) width.value = value
+    })
+
+    const maxWidth = () => Math.max(MIN_WIDTH, Math.min(window.innerWidth * 0.7, window.innerWidth - 360))
+    const clampWidth = (value) => Math.round(Math.min(maxWidth(), Math.max(MIN_WIDTH, value)))
+
+    const saveWidth = () => {
+      store.commit('SET_SETTING', { path: 'chat.panelWidth', value: width.value })
+      store.dispatch('saveSettings')
+    }
+
+    const onResizeMove = (event) => {
+      width.value = clampWidth(window.innerWidth - event.clientX)
+    }
+
+    const stopResize = () => {
+      resizing.value = false
+      document.body.classList.remove('chat-resizing')
+      window.removeEventListener('mousemove', onResizeMove)
+      window.removeEventListener('mouseup', stopResize)
+      saveWidth()
+    }
+
+    const startResize = () => {
+      resizing.value = true
+      document.body.classList.add('chat-resizing')
+      window.addEventListener('mousemove', onResizeMove)
+      window.addEventListener('mouseup', stopResize)
+    }
+
+    const resetWidth = () => {
+      width.value = clampWidth(DEFAULT_WIDTH)
+      saveWidth()
+    }
+
+    // Keep the panel inside the window when the window shrinks
+    const onWindowResize = () => { width.value = clampWidth(width.value) }
+    window.addEventListener('resize', onWindowResize)
+
+    onUnmounted(() => {
+      window.removeEventListener('resize', onWindowResize)
+      if (resizing.value) stopResize()
+    })
+
+    // --- Formatting --------------------------------------------------------
+    const formatTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${n}`)
+    const tokenTitle = computed(() => {
+      const info = lastRequest.value
+      if (!info) return ''
+      const pages = info.truncated
+        ? `Pages ${describePageRanges(info.includedPages)} of ${info.totalPages} were included (document text budget reached).`
+        : `All ${info.totalPages} pages were included.`
+      return `Estimated size of the last request. ${pages}`
+    })
+
+    scrollToBottom()
+
+    return {
+      scroller,
+      input,
+      draft,
+      showSessions,
+      activeSession,
+      activeSessionId,
+      sortedSessions,
+      messages,
+      isStreaming,
+      fullscreen,
+      status,
+      notice,
+      lastRequest,
+      modelId,
+      hasModel,
+      documentTitle,
+      canSend,
+      suggestions,
+      width,
+      resizing,
+      autoGrow,
+      send,
+      stop,
+      retry,
+      dismissNotice,
+      newSession,
+      selectSession,
+      renameSession,
+      deleteSession,
+      openContext,
+      onScroll,
+      toggleFullscreen,
+      startResize,
+      resetWidth,
+      formatTokens,
+      tokenTitle
+    }
+  }
+}
+</script>
+
+<style scoped>
+.chat-panel {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-width: 300px;
+  height: 100%;
+  background: var(--bg-color);
+  border-left: 1px solid var(--border-color);
+}
+
+.chat-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  width: auto;
+  border-left: none;
+}
+
+.chat-panel.fullscreen .chat-messages-inner,
+.chat-panel.fullscreen .chat-composer > * {
+  width: 100%;
+  max-width: 820px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.chat-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 30;
+}
+
+.chat-resizer:hover,
+.chat-panel.resizing .chat-resizer {
+  background: var(--primary-color);
+  opacity: 0.4;
+}
+
+/* Header */
+.chat-header {
+  flex: none;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 10px;
+  background: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.chat-session-toggle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-color);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chat-session-toggle:hover,
+.chat-session-toggle.open {
+  border-color: var(--border-color);
+  background: var(--annotation-bg);
+}
+
+.chat-session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-header-actions {
+  display: flex;
+  gap: 2px;
+}
+
+.chat-icon-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-icon-btn:hover {
+  background: var(--border-color);
+  color: var(--text-color);
+}
+
+.chat-panel svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-caret {
+  width: 12px !important;
+  height: 12px !important;
+  color: var(--text-muted);
+}
+
+/* Messages */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+}
+
+.chat-messages-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12vh;
+  padding: 0 12px;
+  text-align: center;
+}
+
+.chat-empty-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-color);
+  overflow-wrap: anywhere;
+}
+
+.chat-empty-text {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.chat-suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 320px;
+}
+
+.chat-suggestion {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--annotation-bg);
+  color: var(--text-color);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-suggestion:hover {
+  border-color: var(--primary-color);
+}
+
+.chat-notice {
+  flex: none;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--warning-color);
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-color);
+  font-size: 12px;
+}
+
+.chat-notice span {
+  flex: 1;
+}
+
+.chat-notice-close {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* Composer */
+.chat-composer {
+  flex: none;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-color);
+}
+
+.chat-input-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--annotation-bg);
+}
+
+.chat-input-wrap:focus-within {
+  border-color: var(--primary-color);
+}
+
+.chat-input-wrap.disabled {
+  opacity: 0.6;
+}
+
+.chat-input {
+  flex: 1;
+  min-height: 24px;
+  max-height: 200px;
+  padding: 3px 0;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text-color);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.chat-send {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: var(--primary-color);
+  color: #fff;
+  cursor: pointer;
+}
+
+.chat-send:disabled {
+  background: var(--border-color);
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.chat-send.stop {
+  background: var(--text-color);
+  color: var(--bg-color);
+}
+
+.chat-send.stop svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.chat-model,
+.chat-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.chat-status {
+  color: var(--primary-color);
+}
+
+.chat-hint {
+  margin-left: auto;
+}
+</style>
+
+<style>
+/* While dragging the resizer, keep the col-resize cursor everywhere and stop
+   text selection in the PDF */
+body.chat-resizing,
+body.chat-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+</style>

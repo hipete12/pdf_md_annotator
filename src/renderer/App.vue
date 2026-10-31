@@ -27,10 +27,12 @@
       <!-- Toolbar -->
       <Toolbar 
         v-if="pdfDocument"
+        :chat-open="chatVisible"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
         @zoom-reset="zoomReset"
         @open-settings="openSettings"
+        @toggle-chat="toggleChat"
       />
       
       <!-- PDF Viewer -->
@@ -45,6 +47,13 @@
         @open-file="openFile"
       />
     </div>
+    
+    <!-- Chat (right side, resizable; can go full screen) -->
+    <ChatPanel
+      v-if="pdfDocument && chatVisible"
+      @close="toggleChat"
+      @open-settings="openSettings"
+    />
     
     <!-- Settings Modal -->
     <SettingsModal 
@@ -63,6 +72,7 @@ import Toolbar from './components/Toolbar.vue'
 import PdfViewer from './components/PdfViewer.vue'
 import WelcomeScreen from './components/WelcomeScreen.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import ChatPanel from './components/chat/ChatPanel.vue'
 
 // Safely get ipcRenderer
 let ipcRenderer = null
@@ -98,7 +108,8 @@ export default {
     Toolbar,
     PdfViewer,
     WelcomeScreen,
-    SettingsModal
+    SettingsModal,
+    ChatPanel
   },
   
   setup() {
@@ -118,10 +129,18 @@ export default {
     const sidebarVisible = computed(() => store.state.sidebarVisible)
     const settingsModalOpen = computed(() => store.state.settingsModalOpen)
     const settings = computed(() => store.state.settings)
+    const chatVisible = computed(() => Boolean(store.state.settings.chat?.panelVisible))
     
     // Methods
     const toggleSidebar = () => {
       store.commit('SET_SIDEBAR_VISIBLE', !sidebarVisible.value)
+    }
+    
+    const toggleChat = () => {
+      const visible = !chatVisible.value
+      store.commit('SET_SETTING', { path: 'chat.panelVisible', value: visible })
+      if (!visible) store.dispatch('chat/setFullscreen', false)
+      store.dispatch('saveSettings')
     }
     
     const zoomIn = () => {
@@ -265,6 +284,9 @@ export default {
     const handleZoomOut = () => zoomOut()
     const handleZoomReset = () => zoomReset()
     const handleOpenSettings = () => openSettings()
+    const handleToggleChat = () => {
+      if (pdfDocument.value) toggleChat()
+    }
     
     // Lifecycle
     onMounted(() => {
@@ -281,6 +303,7 @@ export default {
         ipcRenderer.on('zoom-out', handleZoomOut)
         ipcRenderer.on('zoom-reset', handleZoomReset)
         ipcRenderer.on('open-settings', handleOpenSettings)
+        ipcRenderer.on('toggle-chat', handleToggleChat)
       }
       
       // Global keyboard shortcuts
@@ -302,6 +325,7 @@ export default {
         ipcRenderer.removeListener('zoom-out', handleZoomOut)
         ipcRenderer.removeListener('zoom-reset', handleZoomReset)
         ipcRenderer.removeListener('open-settings', handleOpenSettings)
+        ipcRenderer.removeListener('toggle-chat', handleToggleChat)
       }
       
       window.removeEventListener('keydown', handleGlobalKeydown)
@@ -408,6 +432,13 @@ export default {
     }
 
     const handleGlobalKeydown = (e) => {
+      // Esc leaves full-screen chat (unless a modal is open on top of it)
+      if (e.key === 'Escape' && store.state.chat.fullscreen && !settingsModalOpen.value) {
+        e.preventDefault()
+        store.dispatch('chat/setFullscreen', false)
+        return
+      }
+
       // Ctrl+A / Cmd+A selects only the rendered PDF text, unless focus is in
       // a native text field where select-all should behave normally.
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
@@ -564,7 +595,9 @@ export default {
       openSettings,
       closeSettings,
       openFile,
-      handleDrop
+      handleDrop,
+      chatVisible,
+      toggleChat
     }
   }
 }

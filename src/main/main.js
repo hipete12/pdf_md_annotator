@@ -172,6 +172,11 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+\\',
           click: () => mainWindow?.webContents.send('toggle-sidebar')
         },
+        {
+          label: 'Toggle Chat',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => mainWindow?.webContents.send('toggle-chat')
+        },
         { type: 'separator' },
         {
           label: 'Zoom In',
