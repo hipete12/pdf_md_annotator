@@ -38,7 +38,7 @@ describe('chatPrompt', () => {
         { kind: 'note', page: 5, text: 'Check eq. 2' }
       ])
       expect(out).to.equal(
-        '<selected_context>\n[p. 3, selected text]\nAttention is all you need\n\n[p. 5, user note]\nCheck eq. 2\n</selected_context>'
+        '<selected_context>\n[p. 3, PDF excerpt]\nAttention is all you need\n\n[p. 5, user\'s note]\nCheck eq. 2\n</selected_context>'
       )
     })
   })
@@ -50,7 +50,7 @@ describe('chatPrompt', () => {
 
     it('puts selections before the input', () => {
       const out = buildUserContent(DEFAULT_USER_TEMPLATE, { input: 'Explain', contexts: [{ kind: 'text', page: 1, text: 'x' }] })
-      expect(out).to.equal('<selected_context>\n[p. 1, selected text]\nx\n</selected_context>\nExplain')
+      expect(out).to.equal('<selected_context>\n[p. 1, PDF excerpt]\nx\n</selected_context>\nExplain')
     })
   })
 
@@ -131,7 +131,7 @@ describe('chatPrompt', () => {
       expect(messages[0].content).to.include('the PDF document "paper.pdf"')
       expect(messages[0].content).to.include('<document>\n[Page 1]\nHello world\n</document>')
       // earlier turns keep the context they were sent with
-      expect(messages[1].content).to.equal('<selected_context>\n[p. 1, selected text]\nHello\n</selected_context>\nWhat?')
+      expect(messages[1].content).to.equal('<selected_context>\n[p. 1, PDF excerpt]\nHello\n</selected_context>\nWhat?')
       expect(messages[3].content).to.equal('And then?')
     })
 
@@ -157,6 +157,15 @@ describe('chatPrompt', () => {
         { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AAA' } }
       ])
     })
+  })
+
+  it('default system prompt explains every context label', () => {
+    for (const label of ['PDF excerpt', "user's note", 'your earlier reply']) {
+      expect(DEFAULT_SYSTEM_TEMPLATE).to.include(`"${label}"`)
+      expect(formatSelections([{ kind: { 'PDF excerpt': 'text', "user's note": 'note', 'your earlier reply': 'reply' }[label], page: 1, turn: 1, text: 'x' }]))
+        .to.include(label)
+    }
+    expect(DEFAULT_SYSTEM_TEMPLATE).to.include('<selected_context>')
   })
 
   it('derives session titles', () => {

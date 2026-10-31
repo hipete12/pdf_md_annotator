@@ -3,6 +3,7 @@
  */
 
 import { createAppStore } from '../../src/renderer/store'
+import { DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_SYSTEM_TEMPLATES } from '../../src/common/llm'
 
 // Records every ipcRenderer.invoke call so save behaviour can be asserted
 const createMockIpc = () => {
@@ -530,5 +531,19 @@ describe('saveSettings', () => {
     // Electron IPC uses structured clone, which throws on Vue's reactive Proxies
     expect(() => structuredClone(call.payload)).to.not.throw()
     expect(call.payload.ui.theme).to.equal('dark')
+  })
+})
+
+describe('System prompt upgrade', () => {
+  it('replaces an unmodified previous default with the current one', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { systemTemplate: PREVIOUS_SYSTEM_TEMPLATES[0] } })
+    expect(store.state.settings.llm.systemTemplate).to.equal(DEFAULT_SYSTEM_TEMPLATE)
+  })
+
+  it('keeps a customised prompt', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { systemTemplate: 'My own prompt {{document}}' } })
+    expect(store.state.settings.llm.systemTemplate).to.equal('My own prompt {{document}}')
   })
 })

@@ -139,7 +139,7 @@ describe('Chat store', () => {
     await store.dispatch('chat/sendMessage', { text: 'Shorter please' })
     const second = ipc.lastCall('llm:chat-start').payload
     expect(second.messages.map(m => m.role)).to.deep.equal(['system', 'user', 'assistant', 'user'])
-    expect(second.messages[1].content).to.equal('<selected_context>\n[p. 2, selected text]\nPage two text\n</selected_context>\nExplain this')
+    expect(second.messages[1].content).to.equal('<selected_context>\n[p. 2, PDF excerpt]\nPage two text\n</selected_context>\nExplain this')
     expect(second.messages[2].content).to.equal('An explanation.')
     expect(second.messages[3].content).to.equal('Shorter please')
   })
@@ -291,7 +291,7 @@ describe('Branches', () => {
       { role: 'user', content: 'first question' },
       { role: 'assistant', content: 'first answer' }
     ])
-    expect(request[3].content).to.equal('<selected_context>\n[p. 1, selected text]\nctx\n</selected_context>\nsecond question')
+    expect(request[3].content).to.equal('<selected_context>\n[p. 1, PDF excerpt]\nctx\n</selected_context>\nsecond question')
   })
 
   it('switches between branches and remembers the position inside each', async () => {
@@ -448,7 +448,7 @@ describe('Context chips', () => {
     store.dispatch('chat/attachPendingContext')
     expect(await store.dispatch('chat/sendMessage', { text: '' })).to.equal(true)
     const last = ipc.lastCall('llm:chat-start').payload.messages.at(-1).content
-    expect(last).to.equal('<selected_context>\n[p. 1, selected text]\nPage one text\n</selected_context>')
+    expect(last).to.equal('<selected_context>\n[p. 1, PDF excerpt]\nPage one text\n</selected_context>')
     expect(store.getters['chat/activeSession'].title).to.equal('Selected context')
   })
 })

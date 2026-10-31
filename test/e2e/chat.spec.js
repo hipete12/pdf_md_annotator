@@ -148,7 +148,7 @@ test.describe('Chat', () => {
     await expect(window.locator('.chat-context-tray')).toHaveCount(0)
 
     const request = fake.requests.find(r => r.url.endsWith('/chat/completions')).body
-    expect(request.messages.at(-1).content).toContain('[p. 2, selected text]\nSecond page about results')
+    expect(request.messages.at(-1).content).toContain('[p. 2, PDF excerpt]\nSecond page about results')
   })
 
   test('regenerate edits the question and creates a branch', async () => {

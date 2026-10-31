@@ -2,6 +2,7 @@ import { createStore } from 'vuex'
 import { markRaw } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { createDefaultSettings, mergeSettings, pickSettings } from '../../common/constants'
+import { DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_SYSTEM_TEMPLATES } from '../../common/llm'
 import { createChatModule, createChatPlugin } from './chat'
 
 // Safely get ipcRenderer - may not be available in browser context
@@ -432,6 +433,10 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
       // edit, so it must not mark the document as having unsaved changes.
       HYDRATE_SETTINGS(state, settings) {
         state.settings = mergeSettings(createDefaultSettings(), pickSettings(settings))
+        // An unmodified old default prompt follows the new default
+        if (PREVIOUS_SYSTEM_TEMPLATES.includes(state.settings.llm.systemTemplate)) {
+          state.settings.llm.systemTemplate = DEFAULT_SYSTEM_TEMPLATE
+        }
       },
     
       SET_SETTINGS(state, settings) {

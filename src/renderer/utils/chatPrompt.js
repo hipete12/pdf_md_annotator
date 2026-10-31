@@ -23,7 +23,8 @@ export function fillTemplate(template, vars) {
   )
 }
 
-const CONTEXT_KIND_LABELS = { text: 'selected text', note: 'user note', reply: 'from your earlier reply' }
+// Explained to the model in the default system prompt (DEFAULT_SYSTEM_TEMPLATE)
+const CONTEXT_KIND_LABELS = { text: 'PDF excerpt', note: "user's note", reply: 'your earlier reply' }
 
 /**
  * Format attached contexts for {{selections}}; empty string when none.

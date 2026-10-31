@@ -19,7 +19,7 @@ describe('context chips', () => {
 
   it('formats reply contexts in the prompt with their turn', () => {
     expect(formatSelections([{ kind: 'reply', turn: 2, text: 'The model uses attention.' }]))
-      .to.equal('<selected_context>\n[turn 2, from your earlier reply]\nThe model uses attention.\n</selected_context>')
+      .to.equal('<selected_context>\n[turn 2, your earlier reply]\nThe model uses attention.\n</selected_context>')
   })
 
   describe('rangeToText', () => {
