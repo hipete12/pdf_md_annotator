@@ -22,6 +22,11 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - Custom macros via `\newcommand`
   - Error display for invalid LaTeX
 - **Code Highlighting**: Syntax highlighting for 20+ programming languages
+- **AI Chat** (`Ctrl+Shift+L`): chat about the open PDF with an LLM
+  - OpenRouter, OpenAI, local Ollama / LM Studio, or any OpenAI-compatible API
+  - The document text is included automatically; select text or click a note to attach it as context
+  - Multiple sessions per document, resizable panel, full-screen mode
+  - Optional page images for vision-capable models
 - **Keyboard Shortcuts**:
   - `Ctrl+B`: Bold
   - `Ctrl+I`: Italic
@@ -31,6 +36,7 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - `Ctrl+Shift+S`: Save As (copies the PDF and its annotations to a new name)
   - `Ctrl+O`: Open file
   - `Ctrl+\`: Toggle sidebar
+  - `Ctrl+Shift+L`: Toggle chat
 - **Hide/Collapse Annotations**:
   - Press `Ctrl+H` to hide an annotation with a title
   - Shows as a small icon with title when collapsed
@@ -146,6 +152,38 @@ Annotations are saved in a `.pdfmark` file alongside the PDF (not embedded in th
   "settings": {}
 }
 ```
+
+## AI Chat
+
+Open **Settings → AI Chat**, pick a provider and load its models:
+
+| Provider | Base URL (default) | API key |
+|----------|--------------------|---------|
+| OpenRouter | `https://openrouter.ai/api/v1` | required |
+| OpenAI | `https://api.openai.com/v1` | required |
+| Ollama | `http://localhost:11434/v1` | – (run `ollama serve`) |
+| LM Studio | `http://localhost:1234/v1` | – (start the local server) |
+| Custom | any OpenAI-compatible `/v1` endpoint | optional |
+
+API keys are encrypted with the OS keychain (Electron `safeStorage`) and never leave
+the main process. On Linux without a keyring (GNOME Keyring / KWallet) the key is only
+obfuscated; the settings page warns about this.
+
+**Context.** Every request includes the document text page by page (`[Page N]`). If it is
+larger than the *document text budget*, only the pages nearest the attached context and the
+page in view are sent. Selecting text in the PDF, or clicking a note, shows a dashed chip
+above the message box; click **+** to attach it to your next message.
+
+**Prompt templates.** The system and user templates are editable. Placeholders:
+`{{title}}`, `{{document}}`, `{{selections}}` (attached text/notes) and `{{input}}`.
+
+**Page images.** With *Send page images* enabled (or the image button in the chat box
+turned on for a session), the attached-context pages, or the page in view, are sent as
+JPEG images. Image support is read from the provider when available (OpenRouter, Ollama,
+LM Studio) and guessed from the model name otherwise; it can be overridden per model.
+
+**Storage.** Sessions are saved to `<name>.pdfchat` next to the PDF (separate from the
+`.pdfmark` annotations), and are copied along on *Save As*. Page images are not stored.
 
 ## Auto-Save
 
