@@ -155,7 +155,8 @@ describe('Markdown Rendering', () => {
 
     it('should show error for invalid LaTeX', () => {
       const result = renderMarkdown('$\\invalidcommand$')
-      expect(result).to.include('math-error').or.include('katex')
+      // KaTeX (throwOnError: false) renders unknown commands in its error colour
+      expect(result).to.include('#cc0000')
     })
 
     it('should handle multiple math expressions', () => {

@@ -40,7 +40,7 @@ const mathCache = new Map()
  * @param {object} macros - Custom LaTeX macros
  * @returns {string} - Rendered HTML or error message
  */
-function renderMath(math, displayMode = false, macros = {}) {
+export function renderMath(math, displayMode = false, macros = {}) {
   const cacheKey = `${math}_${displayMode}_${JSON.stringify(macros)}`
   
   if (mathCache.has(cacheKey)) {
