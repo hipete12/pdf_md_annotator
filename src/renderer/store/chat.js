@@ -270,8 +270,9 @@ export function createChatModule({ ipcRenderer }) {
         try {
           commit('SET_STATUS', 'Reading document…')
           const pages = await extractDocumentPages(rootGetters.visiblePages, rootGetters.getPageSource)
-          // Pages to keep when the document is too long: attached context and current page
-          const currentIndex = rootGetters.visiblePages.indexOf(rootState.currentPage)
+          // Pages to keep when the document is too long: attached context and
+          // the page being read
+          const currentIndex = rootGetters.visiblePages.indexOf(rootState.viewPage ?? rootState.currentPage)
           const focusPages = [
             ...userMessage.contexts.map(c => c.page).filter(Boolean),
             ...(currentIndex >= 0 ? [currentIndex + 1] : [])

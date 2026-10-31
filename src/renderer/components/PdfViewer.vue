@@ -228,6 +228,15 @@ export default {
         offset += height + PAGE_GAP
       }
 
+      // Page under the middle of the viewport ("the page being read")
+      const viewportMiddle = (viewportTop + viewportBottom) / 2
+      let middlePage = orderedPages.value[0]
+      for (const pageNum of orderedPages.value) {
+        if (offsets.get(pageNum) <= viewportMiddle) middlePage = pageNum
+        else break
+      }
+      if (store.state.viewPage !== middlePage) store.commit('SET_VIEW_PAGE', middlePage)
+
       return orderedPages.value.filter(pageNum => {
         const top = offsets.get(pageNum)
         const metric = pageMetrics.get(pageNum)
@@ -731,6 +740,12 @@ export default {
     
     watch(currentPage, (newPage) => {
       scrollToPage(newPage)
+    })
+    
+    // Explicit navigation requests (e.g. clicking a chat context) scroll even
+    // when the target equals currentPage, which does not follow scrolling
+    watch(() => store.state.scrollRequest, (request) => {
+      if (request) scrollToPage(request.pageId)
     })
     
     watch(selectedAnnotation, () => {

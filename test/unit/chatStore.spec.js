@@ -213,4 +213,30 @@ describe('Chat store', () => {
     store.commit('SET_SETTING', { path: 'markdown.fontSize', value: 20 })
     expect(store.state.isDirty).to.equal(true)
   })
+
+  it('keeps the page being read when the document is over budget', async () => {
+    const texts = Array.from({ length: 6 }, (_, i) => `Page ${i + 1} `.repeat(200))
+    const { store, ipc } = await setup({ texts })
+    store.commit('SET_SETTING', { path: 'llm.contextBudgetTokens', value: 1000 })
+    store.commit('SET_VIEW_PAGE', 5) // scrolled to page 5; currentPage is still 1
+    await store.dispatch('chat/sendMessage', { text: 'What is here?' })
+    const system = ipc.lastCall('llm:chat-start').payload.messages[0].content
+    expect(system).to.include('[Page 5]')
+    expect(system).to.not.include('[Page 1]')
+    expect(chat(store).lastRequest.truncated).to.equal(true)
+    expect(chat(store).lastRequest.includedPages).to.include(5)
+  })
+})
+
+describe('Page navigation state', () => {
+  it('scroll requests always change (nonce) and reset with a new document', () => {
+    const store = createAppStore({ ipcRenderer: createFakeIpc() })
+    store.commit('REQUEST_PAGE_SCROLL', 3)
+    store.commit('REQUEST_PAGE_SCROLL', 3)
+    expect(store.state.scrollRequest).to.deep.equal({ pageId: 3, nonce: 2 })
+    store.commit('SET_VIEW_PAGE', 4)
+    store.commit('SET_PDF_DOCUMENT', { document: fakePdf(['a']), path: '/x.pdf' })
+    expect(store.state.viewPage).to.equal(null)
+    expect(store.state.scrollRequest).to.equal(null)
+  })
 })

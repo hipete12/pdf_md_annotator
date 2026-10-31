@@ -74,6 +74,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       pdfDocument: null,
       pageCount: 0,
       currentPage: 1,
+      // Page under the middle of the viewer, updated while scrolling
+      // (currentPage is only changed by explicit navigation)
+      viewPage: null,
+      // { pageId, nonce }: ask the viewer to scroll to a page
+      scrollRequest: null,
       scale: 1.0,
       pageOrder: [], // Array of page indices for reordering
       deletedPages: [], // Track deleted pages
@@ -216,12 +221,22 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         state.concatenatedPdfs = []
         state.additionalPdfs = {}
         state.currentPage = 1
+        state.viewPage = null
+        state.scrollRequest = null
         state.pdfmarkCreated = null
         state.isDirty = false
       },
     
       SET_CURRENT_PAGE(state, page) {
         state.currentPage = page
+      },
+    
+      SET_VIEW_PAGE(state, pageId) {
+        state.viewPage = pageId
+      },
+    
+      REQUEST_PAGE_SCROLL(state, pageId) {
+        state.scrollRequest = { pageId, nonce: (state.scrollRequest?.nonce || 0) + 1 }
       },
     
       SET_SCALE(state, scale) {

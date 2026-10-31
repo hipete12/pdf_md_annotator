@@ -317,7 +317,7 @@ export default {
 
     // Jump back to where an attached context came from
     const openContext = (context) => {
-      if (context.pageId) store.commit('SET_CURRENT_PAGE', context.pageId)
+      if (context.pageId) store.commit('REQUEST_PAGE_SCROLL', context.pageId)
       if (context.kind === 'note' && context.noteId) store.dispatch('selectAnnotation', context.noteId)
       if (fullscreen.value) store.dispatch('chat/setFullscreen', false)
     }
