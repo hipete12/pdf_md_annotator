@@ -286,9 +286,10 @@
         <span
           v-if="lastRequest"
           class="chat-tokens"
+          :class="tokenLevel"
           :title="tokenTitle"
         >
-          ~{{ formatTokens(lastRequest.estimatedTokens) }} tokens{{ lastRequest.truncated ? ' · partial document' : '' }}
+          ~{{ formatTokens(lastRequest.estimatedTokens) }}{{ contextLength ? ` / ${formatTokens(contextLength)}` : '' }} tokens{{ lastRequest.images ? ` + ${lastRequest.images} img` : '' }}{{ lastRequest.truncated ? ' · partial document' : '' }}
         </span>
         <span class="chat-hint">Shift+Enter for a new line</span>
       </div>
@@ -558,13 +559,26 @@ export default {
 
     // --- Formatting --------------------------------------------------------
     const formatTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${n}`)
+    // Context window of the selected model, when the provider reports it
+    const contextLength = computed(() => {
+      const model = (store.state.llmModels[llm.value.provider] || []).find(m => m.id === modelId.value)
+      return model?.contextLength || null
+    })
+    const tokenLevel = computed(() => {
+      if (!lastRequest.value || !contextLength.value) return ''
+      const ratio = lastRequest.value.estimatedTokens / contextLength.value
+      return ratio > 1 ? 'over' : ratio > 0.8 ? 'near' : ''
+    })
     const tokenTitle = computed(() => {
       const info = lastRequest.value
       if (!info) return ''
       const pages = info.truncated
         ? `Pages ${describePageRanges(info.includedPages)} of ${info.totalPages} were included (document text budget reached).`
         : `All ${info.totalPages} pages were included.`
-      return `Estimated size of the last request. ${pages}`
+      const limit = tokenLevel.value === 'over'
+        ? ' This is more than the model\'s context window: lower the document text budget in Settings or start a new session.'
+        : tokenLevel.value === 'near' ? ' This is close to the model\'s context window.' : ''
+      return `Estimated text size of the last request (images not counted). ${pages}${limit}`
     })
 
     scrollToBottom()
@@ -614,7 +628,9 @@ export default {
       startResize,
       resetWidth,
       formatTokens,
-      tokenTitle
+      tokenTitle,
+      tokenLevel,
+      contextLength
     }
   }
 }
@@ -1066,6 +1082,15 @@ export default {
 
 .chat-status {
   color: var(--primary-color);
+}
+
+.chat-tokens.near {
+  color: var(--warning-color);
+}
+
+.chat-tokens.over {
+  color: var(--danger-color);
+  font-weight: 600;
 }
 
 .chat-hint {
