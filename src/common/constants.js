@@ -2,6 +2,8 @@
  * Shared constants and utilities used by both main and renderer processes
  */
 
+import { DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS } from './llm'
+
 // .pdfmark file format version
 export const PDFMARK_VERSION = '1.0.0'
 
@@ -42,6 +44,32 @@ export const DEFAULT_SETTINGS = Object.freeze({
     sidebarWidth: 200,
     sidebarVisible: true,
     theme: 'light'
+  },
+  // LLM connection. API keys are NOT settings: they are stored encrypted by
+  // the main process (see src/main/secrets.js).
+  llm: {
+    provider: 'openrouter',
+    baseUrls: Object.fromEntries(
+      Object.values(LLM_PROVIDERS).map(p => [p.id, p.baseUrl])
+    ),
+    // Selected model per provider
+    models: Object.fromEntries(Object.keys(LLM_PROVIDERS).map(id => [id, ''])),
+    // { [modelId]: true|false } manual override of vision detection
+    visionOverrides: {},
+    temperature: 0.3,
+    // Above this estimated size only the relevant pages are sent
+    contextBudgetTokens: 32000,
+    systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
+    userTemplate: DEFAULT_USER_TEMPLATE
+  },
+  chat: {
+    panelVisible: false,
+    panelWidth: 420,
+    // Attach rendered page images for vision-capable models
+    visionEnabled: false,
+    // 'context': pages of attached context (or the current page); 'all'
+    visionPages: 'context',
+    maxVisionPages: 4
   }
 })
 

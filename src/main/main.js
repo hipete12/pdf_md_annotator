@@ -6,6 +6,9 @@ const log = require('electron-log')
 const { fileURLToPath } = require('url')
 
 const { createDefaultSettings, pickSettings } = require('../common/constants')
+const { LLM_PROVIDERS } = require('../common/llm')
+const { listModels, streamChat } = require('./llm')
+const { createSecrets } = require('./secrets')
 
 // Initialize store for settings. User settings live under the top-level keys
 // listed in SETTINGS_KEYS; recentFiles is app state, not a user setting.
@@ -16,6 +19,8 @@ const store = new Store({
     recentFiles: []
   }
 })
+
+const secrets = createSecrets(store)
 
 let mainWindow = null
 let currentPdfPath = null
@@ -440,6 +445,78 @@ ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
     return true
   }
   return false
+})
+
+// ---------------------------------------------------------------------------
+// LLM chat
+// ---------------------------------------------------------------------------
+
+// API keys: write-only from the renderer's point of view
+ipcMain.handle('llm:key-status', () => ({
+  keys: secrets.keyStatus(),
+  storage: secrets.storageStatus()
+}))
+
+ipcMain.handle('llm:set-key', (event, { providerId, apiKey }) => {
+  if (!LLM_PROVIDERS[providerId]) return { success: false, error: 'Unknown provider' }
+  try {
+    secrets.setKey(providerId, apiKey)
+    return { success: true, keys: secrets.keyStatus() }
+  } catch (err) {
+    log.error('Failed to store API key:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
+  try {
+    const models = await listModels({ providerId, baseUrl, apiKey: secrets.getKey(providerId) })
+    return { success: true, models }
+  } catch (err) {
+    return { success: false, code: err.code || 'unknown', error: err.message }
+  }
+})
+
+// Streaming chat: the renderer picks a requestId and listens for
+// llm:chat-delta / llm:chat-done / llm:chat-error events carrying it.
+const activeChats = new Map()
+
+ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature }) => {
+  if (!requestId || activeChats.has(requestId)) return { started: false, error: 'Invalid request id' }
+
+  const controller = new AbortController()
+  activeChats.set(requestId, controller)
+  const sender = event.sender
+  const send = (channel, payload) => {
+    if (!sender.isDestroyed()) sender.send(channel, { requestId, ...payload })
+  }
+
+  streamChat({
+    providerId,
+    baseUrl,
+    apiKey: secrets.getKey(providerId),
+    model,
+    messages,
+    temperature,
+    signal: controller.signal,
+    onEvent: (e) => {
+      if (e.type === 'delta') send('llm:chat-delta', { content: e.content, reasoning: e.reasoning })
+    }
+  })
+    .then(result => send('llm:chat-done', result))
+    .catch(err => {
+      if (err.code !== 'aborted') log.warn('Chat request failed:', err.code, err.message)
+      send('llm:chat-error', { code: err.code || 'unknown', message: err.message })
+    })
+    .finally(() => activeChats.delete(requestId))
+
+  return { started: true }
+})
+
+ipcMain.handle('llm:chat-abort', (event, { requestId }) => {
+  const controller = activeChats.get(requestId)
+  if (controller) controller.abort()
+  return { aborted: Boolean(controller) }
 })
 
 // App lifecycle
