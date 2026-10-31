@@ -433,20 +433,45 @@ export default {
   color: var(--text-muted);
 }
 
-.ai-ok {
+
+/* .settings-hint / .settings-row-full are scoped to SettingsModal, so this
+   child component needs its own copies */
+.settings-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: -6px 0 12px;
+}
+
+.settings-hint code {
+  background: var(--sidebar-bg);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-size: 10px;
+}
+
+.settings-row-full {
+  margin-bottom: 16px;
+}
+
+.settings-row-full .settings-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.settings-row-full .settings-hint {
+  margin-top: 6px;
+}
+
+.settings-hint.ai-ok {
   color: var(--success-color);
 }
 
-.ai-error {
+.settings-hint.ai-error {
   color: var(--danger-color);
 }
 
-.ai-warning {
+.settings-hint.ai-warning {
   color: var(--warning-color);
-}
-
-.ai-settings .settings-hint {
-  margin: -6px 0 12px;
 }
 
 .ai-badge {
