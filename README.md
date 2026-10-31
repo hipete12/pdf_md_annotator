@@ -177,6 +177,12 @@ obfuscated; the settings page warns about this.
 for the current session; it is remembered with that session (also after a restart) until
 changed. New sessions start with the default model from Settings.
 
+**Regenerate and branches.** *Regenerate* on a reply (or the pencil on your message)
+turns your message into an edit box: change it and press Enter to get a new reply, or Esc /
+click elsewhere to cancel. The edited message becomes a new branch, so the earlier version is
+kept: switch between versions with `‹ n / m ›` under the message, delete one with the trash
+button, or open the branch map (icon next to `+`) to see and jump between all branches.
+
 **Context.** Every request includes the document text page by page (`[Page N]`). If it is
 larger than the *document text budget*, only the pages nearest the attached context and the
 page in view are sent. Selecting text in the PDF, or clicking a note, shows a dashed chip

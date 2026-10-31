@@ -151,6 +151,33 @@ test.describe('Chat', () => {
     expect(request.messages.at(-1).content).toContain('[p. 2, selected text]\nSecond page about results')
   })
 
+  test('regenerate edits the question and creates a branch', async () => {
+    await toggleChat()
+    await window.fill('.chat-input', 'Original question')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-message-assistant .chat-answer')).toBeVisible()
+    await expect(window.locator('.chat-send.stop')).toHaveCount(0)
+
+    await window.getByRole('button', { name: 'Regenerate', exact: true }).click()
+    const edit = window.locator('.chat-edit-input')
+    await expect(edit).toHaveValue('Original question')
+    await window.keyboard.press('Escape')
+    await expect(window.locator('.chat-edit')).toHaveCount(0)
+
+    await window.getByRole('button', { name: 'Regenerate', exact: true }).click()
+    await edit.fill('Edited question')
+    await edit.press('Enter')
+    await expect(window.locator('.chat-bubble')).toHaveText('Edited question')
+    await expect(window.locator('.chat-branch-count')).toHaveText('2 / 2')
+
+    await window.click('.chat-branch-btn[title="Previous branch"]')
+    await expect(window.locator('.chat-bubble')).toHaveText('Original question')
+
+    await window.click('.chat-icon-btn[title="Branches"]')
+    await expect(window.locator('.branch-map-node')).toHaveCount(2)
+    expect(fake.requests.filter(r => r.url.endsWith('/chat/completions')).length).toBe(2)
+  })
+
   test('full screen can be entered and left with Esc', async () => {
     await toggleChat()
     await window.click('.chat-icon-btn[title="Full screen"]')
