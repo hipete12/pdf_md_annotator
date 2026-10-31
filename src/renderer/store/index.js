@@ -655,6 +655,9 @@ export default createStore({
     
     hideAnnotation({ commit, state }, { id, title }) {
       commit('SET_ANNOTATION_COLLAPSED_TITLE', { id, title })
+      // Deselect so the annotation immediately renders in its smaller
+      // collapsed form instead of remaining expanded while selected.
+      commit('SET_SELECTED_ANNOTATION', null)
     },
     
     unhideAnnotation({ commit }, id) {

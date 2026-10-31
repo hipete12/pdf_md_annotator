@@ -347,7 +347,7 @@ export default {
         return
       }
       
-      if (e.ctrlKey && e.key === 'h') {
+      if (e.ctrlKey && e.key.toLowerCase() === 'h') {
         e.preventDefault()
         
         if (props.annotation.isCollapsed) {

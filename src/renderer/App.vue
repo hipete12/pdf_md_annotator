@@ -108,6 +108,10 @@ export default {
     // Track the in-flight PDF loading task so it can be cancelled if the user
     // opens another PDF before the current one finishes loading.
     let currentLoadingTask = null
+
+    // PDF-only select-all mode used to keep copied text free of annotations.
+    let pdfSelectAllActive = false
+    let pdfSelectAllText = ''
     
     // Computed properties
     const pdfDocument = computed(() => store.state.pdfDocument)
@@ -276,6 +280,11 @@ export default {
       
       // Global keyboard shortcuts
       window.addEventListener('keydown', handleGlobalKeydown)
+
+      // Clean PDF-only copy handling for Ctrl+A selections
+      document.addEventListener('copy', handlePdfSelectAllCopy)
+      document.addEventListener('mousedown', clearPdfSelectAllMode, true)
+      document.addEventListener('selectionchange', handlePdfSelectionChange)
     })
     
     onUnmounted(() => {
@@ -290,9 +299,118 @@ export default {
       }
       
       window.removeEventListener('keydown', handleGlobalKeydown)
+      document.removeEventListener('copy', handlePdfSelectAllCopy)
+      document.removeEventListener('mousedown', clearPdfSelectAllMode, true)
+      document.removeEventListener('selectionchange', handlePdfSelectionChange)
     })
     
+    const getElementTarget = (target) => {
+      if (!target) return null
+      if (target.nodeType === Node.ELEMENT_NODE) return target
+      return target.parentElement || null
+    }
+
+    const isTextEntryTarget = (target) => {
+      const element = getElementTarget(target)
+      if (!element || typeof element.closest !== 'function') return false
+      return Boolean(element.closest(
+        'textarea, input, select, [contenteditable]:not([contenteditable="false"])'
+      ))
+    }
+
+    const clearPdfSelectAllMode = () => {
+      pdfSelectAllActive = false
+      pdfSelectAllText = ''
+      document.querySelector('.pdf-pages-container')
+        ?.classList.remove('pdf-select-all-mode')
+    }
+
+    const selectAllPdfText = () => {
+      const selection = window.getSelection()
+      if (!selection) return false
+
+      const annotationLayers = Array.from(
+        document.querySelectorAll('.pdf-pages-container .annotation-layer')
+      )
+      const previousDisplays = annotationLayers.map(layer => layer.style.display)
+      let text = ''
+
+      try {
+        // Hide annotation overlays so their text/emoji cannot enter the Range.
+        for (const layer of annotationLayers) {
+          layer.style.display = 'none'
+        }
+
+        const layers = document.querySelectorAll('.pdf-pages-container .textLayer')
+        let firstNode = null
+        let lastNode = null
+
+        for (const layer of layers) {
+          const walker = document.createTreeWalker(
+            layer,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode(node) {
+                return node.nodeValue && node.nodeValue.length > 0
+                  ? NodeFilter.FILTER_ACCEPT
+                  : NodeFilter.FILTER_REJECT
+              }
+            }
+          )
+          let node = walker.nextNode()
+          while (node) {
+            if (!firstNode) firstNode = node
+            lastNode = node
+            node = walker.nextNode()
+          }
+        }
+
+        if (!firstNode || !lastNode) return false
+
+        const range = document.createRange()
+        range.setStart(firstNode, 0)
+        range.setEnd(lastNode, lastNode.nodeValue.length)
+        selection.removeAllRanges()
+        selection.addRange(range)
+        text = selection.toString()
+      } finally {
+        annotationLayers.forEach((layer, index) => {
+          layer.style.display = previousDisplays[index]
+        })
+      }
+
+      document.querySelector('.pdf-pages-container')
+        ?.classList.add('pdf-select-all-mode')
+      pdfSelectAllActive = true
+      pdfSelectAllText = text
+      return true
+    }
+
+    const handlePdfSelectAllCopy = (event) => {
+      if (!pdfSelectAllActive || !pdfSelectAllText) return
+      if (!event.clipboardData) return
+      event.clipboardData.setData('text/plain', pdfSelectAllText)
+      event.preventDefault()
+    }
+
+    const handlePdfSelectionChange = () => {
+      if (!pdfSelectAllActive) return
+      const selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        clearPdfSelectAllMode()
+      }
+    }
+
     const handleGlobalKeydown = (e) => {
+      // Ctrl+A / Cmd+A selects only the rendered PDF text, unless focus is in
+      // a native text field where select-all should behave normally.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        if (!isTextEntryTarget(e.target) && selectAllPdfText()) {
+          e.preventDefault()
+        }
+        return
+      }
+
       // Ctrl+, to open settings
       if (e.ctrlKey && e.key === ',') {
         e.preventDefault()

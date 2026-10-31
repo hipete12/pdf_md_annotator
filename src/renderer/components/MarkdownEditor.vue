@@ -178,7 +178,7 @@ export default {
       }
       
       // Hide annotation: Ctrl+H
-      if (e.ctrlKey && e.key === 'h') {
+      if (e.ctrlKey && e.key.toLowerCase() === 'h') {
         e.preventDefault()
         emit('hide-annotation')
         return
