@@ -10,7 +10,7 @@ import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom 
 import { extractDocumentPages } from '../utils/documentText'
 import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
 import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
-import { activePath, ancestorsOf, normalizeTree } from '../utils/chatTree'
+import { activePath, ancestorsOf, normalizeTree, pointersToShow, siblingsOf, subtreeIds } from '../utils/chatTree'
 
 // 1.1.0: messages form a tree (parentId / activeChildId / rootActiveId)
 export const PDFCHAT_VERSION = '1.1.0'
@@ -496,6 +496,79 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         if (!session) return
         commit('SET_SESSION_VISION', { id: session.id, value })
         if (session.messages.length) return dispatch('persist')
+      },
+
+      // Edit a user message and regenerate: the edited text becomes a new
+      // sibling of the original (a new branch, even when unchanged) with a
+      // fresh reply. The original branch is kept and can be switched back to.
+      async editAndRegenerate({ commit, dispatch, state, getters }, { messageId, text, contexts }) {
+        const session = getters.activeSession
+        if (!session || state.streaming) return false
+        const original = session.messages.find(m => m.id === messageId)
+        if (!original || original.role !== 'user') return false
+        const input = String(text || '').trim()
+        const keptContexts = clone(contexts ?? original.contexts ?? [])
+        if (!input && keptContexts.length === 0) return false
+        if (!getters.sessionModel.model) {
+          commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
+          return false
+        }
+        commit('SET_NOTICE', '')
+
+        const edited = {
+          id: uuidv4(),
+          role: 'user',
+          parentId: original.parentId ?? null,
+          activeChildId: null,
+          content: input,
+          contexts: keptContexts,
+          created: now()
+        }
+        commit('ADD_MESSAGE', { sessionId: session.id, message: edited })
+        return dispatch('generateReply', { sessionId: session.id, userMessageId: edited.id })
+      },
+
+      // Show the branch containing a message (keeps where the user last was below it)
+      switchBranch({ commit, dispatch, state, getters }, messageId) {
+        const session = getters.activeSession
+        if (!session || state.streaming) return false
+        const updates = pointersToShow(session, messageId)
+        if (updates.length === 0) return false
+        for (const { parentId, childId } of updates) {
+          commit('SET_ACTIVE_CHILD', { sessionId: session.id, parentId, childId })
+        }
+        dispatch('persist')
+        return true
+      },
+
+      // Step to the previous (-1) or next (+1) alternative at a fork
+      switchSibling({ dispatch, getters }, { messageId, offset }) {
+        const session = getters.activeSession
+        const message = session?.messages.find(m => m.id === messageId)
+        const siblings = siblingsOf(session, message)
+        const index = siblings.findIndex(m => m.id === messageId)
+        const target = siblings[index + offset]
+        return target ? dispatch('switchBranch', target.id) : false
+      },
+
+      // Delete one alternative at a fork (with everything below it). Only
+      // allowed when another alternative remains, so the conversation itself
+      // is never removed this way.
+      deleteBranch({ commit, dispatch, state, getters }, messageId) {
+        const session = getters.activeSession
+        if (!session || state.streaming) return false
+        const message = session.messages.find(m => m.id === messageId)
+        const siblings = siblingsOf(session, message)
+        if (!message || siblings.length < 2) return false
+        const index = siblings.findIndex(m => m.id === messageId)
+        const neighbour = siblings[index - 1] || siblings[index + 1]
+        const wasShown = activePath(session).some(m => m.id === messageId)
+        commit('REMOVE_MESSAGES', { sessionId: session.id, ids: [...subtreeIds(session, messageId)] })
+        if (wasShown) {
+          commit('SET_ACTIVE_CHILD', { sessionId: session.id, parentId: message.parentId ?? null, childId: neighbour.id })
+        }
+        dispatch('persist')
+        return true
       },
 
       // Retry the last reply of the visible branch in place (no new branch).

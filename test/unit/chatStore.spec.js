@@ -243,6 +243,118 @@ describe('Chat store', () => {
   })
 })
 
+describe('Branches', () => {
+  // Two finished turns on the visible branch
+  async function twoTurns() {
+    const env = await setup()
+    const { store, ipc } = env
+    for (const [q, a] of [['first question', 'first answer'], ['second question', 'second answer']]) {
+      await store.dispatch('chat/sendMessage', { text: q })
+      const { requestId } = ipc.lastCall('llm:chat-start').payload
+      ipc.emit('llm:chat-delta', { requestId, content: a })
+      await tick(50)
+      ipc.emit('llm:chat-done', { requestId })
+      await tick()
+    }
+    return env
+  }
+  const visible = (store) => store.getters['chat/activeMessages'].map(m => m.content)
+
+  it('editing an earlier message creates a branch and sends only that branch', async () => {
+    const { store, ipc } = await twoTurns()
+    const [first] = store.getters['chat/activeMessages']
+    await store.dispatch('chat/editAndRegenerate', { messageId: first.id, text: 'first question, rephrased' })
+
+    expect(visible(store)).to.deep.equal(['first question, rephrased', ''])
+    const request = ipc.lastCall('llm:chat-start').payload.messages
+    expect(request.map(m => m.role)).to.deep.equal(['system', 'user'])
+    expect(request[1].content).to.equal('first question, rephrased')
+
+    const session = store.getters['chat/activeSession']
+    expect(session.messages).to.have.length(6) // nothing was deleted
+    const edited = store.getters['chat/activeMessages'][0]
+    expect(edited.parentId).to.equal(null)
+    expect(session.messages.filter(m => m.parentId === null).map(m => m.content)).to.deep.equal(['first question', 'first question, rephrased'])
+  })
+
+  it('an unchanged regenerate still branches at the user message, keeping contexts', async () => {
+    const { store, ipc } = await twoTurns()
+    const second = store.getters['chat/activeMessages'][2]
+    second.contexts.push({ kind: 'text', page: 1, pageId: 1, text: 'ctx' })
+    await store.dispatch('chat/editAndRegenerate', { messageId: second.id, text: second.content })
+    const path = store.getters['chat/activeMessages']
+    expect(path[2].id).to.not.equal(second.id)
+    expect(path[2].contexts).to.deep.equal([{ kind: 'text', page: 1, pageId: 1, text: 'ctx' }])
+    // history: the first exchange, then the regenerated turn with its context
+    const request = ipc.lastCall('llm:chat-start').payload.messages
+    expect(request.slice(1, 3)).to.deep.equal([
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first answer' }
+    ])
+    expect(request[3].content).to.equal('<selected_context>\n[p. 1, selected text]\nctx\n</selected_context>\nsecond question')
+  })
+
+  it('switches between branches and remembers the position inside each', async () => {
+    const { store, ipc } = await twoTurns()
+    const first = store.getters['chat/activeMessages'][0]
+    await store.dispatch('chat/editAndRegenerate', { messageId: first.id, text: 'alt' })
+    ipc.emit('llm:chat-done', { requestId: ipc.lastCall('llm:chat-start').payload.requestId })
+    await tick()
+    const alt = store.getters['chat/activeMessages'][0]
+
+    await store.dispatch('chat/switchSibling', { messageId: alt.id, offset: -1 })
+    expect(visible(store)).to.deep.equal(['first question', 'first answer', 'second question', 'second answer'])
+    await store.dispatch('chat/switchSibling', { messageId: first.id, offset: +1 })
+    expect(visible(store)[0]).to.equal('alt')
+    expect(await store.dispatch('chat/switchSibling', { messageId: alt.id, offset: +1 })).to.equal(false)
+
+    // switching is saved
+    const saved = ipc.lastCall('chat:save').payload.data.sessions[0]
+    expect(saved.rootActiveId).to.equal(alt.id)
+  })
+
+  it('blocks branch changes while streaming', async () => {
+    const { store } = await twoTurns()
+    const first = store.getters['chat/activeMessages'][0]
+    await store.dispatch('chat/sendMessage', { text: 'third' })
+    expect(store.getters['chat/isStreaming']).to.equal(true)
+    expect(await store.dispatch('chat/editAndRegenerate', { messageId: first.id, text: 'x' })).to.equal(false)
+    expect(await store.dispatch('chat/switchBranch', first.id)).to.equal(false)
+    expect(await store.dispatch('chat/deleteBranch', first.id)).to.equal(false)
+  })
+
+  it('deletes a branch with its subtree and shows a neighbour', async () => {
+    const { store, ipc } = await twoTurns()
+    const first = store.getters['chat/activeMessages'][0]
+    expect(await store.dispatch('chat/deleteBranch', first.id)).to.equal(false) // only alternative
+
+    await store.dispatch('chat/editAndRegenerate', { messageId: first.id, text: 'alt' })
+    ipc.emit('llm:chat-done', { requestId: ipc.lastCall('llm:chat-start').payload.requestId })
+    await tick()
+    const alt = store.getters['chat/activeMessages'][0]
+    await store.dispatch('chat/switchBranch', first.id)
+
+    // deleting the shown branch moves to the remaining one
+    expect(await store.dispatch('chat/deleteBranch', first.id)).to.equal(true)
+    expect(visible(store)[0]).to.equal('alt')
+    const session = store.getters['chat/activeSession']
+    expect(session.messages.map(m => m.content)).to.deep.equal(['alt', ''])
+    expect(ipc.lastCall('chat:save').payload.data.sessions[0].messages).to.have.length(2)
+    expect(alt.id).to.equal(session.rootActiveId)
+  })
+
+  it('error retry stays in place without creating a branch', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/sendMessage', { text: 'q' })
+    ipc.emit('llm:chat-error', { requestId: ipc.lastCall('llm:chat-start').payload.requestId, code: 'http', message: 'boom' })
+    await tick()
+    await store.dispatch('chat/retry')
+    const session = store.getters['chat/activeSession']
+    expect(session.messages).to.have.length(2)
+    expect(session.messages.filter(m => m.parentId === null)).to.have.length(1)
+  })
+})
+
 describe('Per-session model', () => {
   it('uses the Settings default until the session picks its own model', async () => {
     const { store, ipc } = await setup()
