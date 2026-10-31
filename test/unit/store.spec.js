@@ -335,3 +335,46 @@ describe('Settings hydration', () => {
     expect(b.state.settings.markdown.fontSize).to.equal(14)
   })
 })
+
+describe('Saving .pdfmark', () => {
+  const savedData = (ipc) => ipc.calls.filter(c => c.channel === 'save-pdfmark').map(c => c.payload.data)
+
+  it('keeps the created timestamp from the loaded file and sets modified', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('LOAD_ANNOTATIONS', { version: '1.0.0', created: '2020-01-01T00:00:00.000Z' })
+
+    await store.dispatch('savePdfmark')
+    await store.dispatch('savePdfmark')
+
+    const [first, second] = savedData(ipc)
+    expect(first.created).to.equal('2020-01-01T00:00:00.000Z')
+    expect(second.created).to.equal('2020-01-01T00:00:00.000Z')
+    expect(Date.parse(second.modified)).to.be.greaterThan(Date.parse(first.created))
+  })
+
+  it('sets created on the first save of a new .pdfmark and keeps it afterwards', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+
+    await store.dispatch('savePdfmark')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await store.dispatch('savePdfmark')
+
+    const [first, second] = savedData(ipc)
+    expect(first.created).to.be.a('string')
+    expect(second.created).to.equal(first.created)
+    expect(second.modified).to.not.equal(first.created)
+  })
+
+  it('resets created when a different PDF is opened', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('LOAD_ANNOTATIONS', { created: '2020-01-01T00:00:00.000Z' })
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/b.pdf' })
+    expect(store.state.pdfmarkCreated).to.be.null
+  })
+})

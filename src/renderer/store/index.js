@@ -73,7 +73,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       additionalPdfs: {},
     
       // .pdfmark file version for extensibility
-      pdfmarkVersion: '1.0.0'
+      pdfmarkVersion: '1.0.0',
+    
+      // When the .pdfmark for the current PDF was first created (ISO string),
+      // null until it is loaded or first saved
+      pdfmarkCreated: null
     }),
 
     getters: {
@@ -173,6 +177,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         state.concatenatedPdfs = []
         state.additionalPdfs = {}
         state.currentPage = 1
+        state.pdfmarkCreated = null
         state.isDirty = false
       },
     
@@ -294,6 +299,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           state.pageOrder = data.pageOrder || state.pageOrder
           state.deletedPages = data.deletedPages || []
           state.pdfmarkVersion = data.version || '1.0.0'
+          state.pdfmarkCreated = data.created || null
           state.concatenatedPdfs = data.concatenatedPdfs || []
         
           // Merge per-document settings section by section, so keys missing
@@ -393,6 +399,10 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         state.settingsModalOpen = open
       },
     
+      SET_PDFMARK_CREATED(state, created) {
+        state.pdfmarkCreated = created
+      },
+    
       MARK_CLEAN(state) {
         state.isDirty = false
       },
@@ -450,12 +460,16 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       async savePdfmark({ state, commit }, { commit: commitFile = true } = {}) {
         if (!state.pdfPath || !ipcRenderer) return
       
+        const now = new Date().toISOString()
+        if (!state.pdfmarkCreated) commit('SET_PDFMARK_CREATED', now)
+      
         // Create a plain JSON-serializable copy of the data
         // This avoids "An object could not be cloned" errors with IPC
         const data = JSON.parse(JSON.stringify({
           version: state.pdfmarkVersion,
           pdfPath: state.pdfPath,
-          created: new Date().toISOString(),
+          created: state.pdfmarkCreated,
+          modified: now,
           annotations: state.annotations,
           pageOrder: state.pageOrder,
           deletedPages: state.deletedPages,
