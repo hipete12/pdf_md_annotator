@@ -211,6 +211,9 @@
           </div>
         </div>
         
+        <!-- AI chat (provider, model, vision, prompt templates) -->
+        <AiChatSettings />
+        
         <!-- UI Settings -->
         <div class="settings-section">
           <h3 class="settings-section-title">UI Settings</h3>
@@ -257,9 +260,12 @@
 import { ref, computed } from 'vue'
 import { useStore } from 'vuex'
 import { createDefaultSettings } from '../../common/constants'
+import AiChatSettings from './AiChatSettings.vue'
 
 export default {
   name: 'SettingsModal',
+  
+  components: { AiChatSettings },
   
   emits: ['close'],
   

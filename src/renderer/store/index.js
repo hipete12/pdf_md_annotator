@@ -83,6 +83,10 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       // Settings
       settings: createDefaultSettings(),
     
+      // Chat models fetched per provider: { [providerId]: [model, ...] }
+      // (see normalizeModelList in common/llm.js). Not persisted.
+      llmModels: {},
+    
       // UI state
       settingsModalOpen: false,
       isDirty: false, // Track unsaved changes
@@ -421,6 +425,10 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         }
         obj[keys[keys.length - 1]] = value
         state.isDirty = true
+      },
+    
+      SET_LLM_MODELS(state, { providerId, models }) {
+        state.llmModels = { ...state.llmModels, [providerId]: models }
       },
     
       SET_SETTINGS_MODAL(state, open) {

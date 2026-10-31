@@ -500,3 +500,23 @@ describe('Save As', () => {
     expect(ipc.calls).to.have.length(0)
   })
 })
+
+describe('LLM models', () => {
+  it('stores model lists per provider', () => {
+    const store = createTestStore()
+    store.commit('SET_LLM_MODELS', { providerId: 'ollama', models: [{ id: 'llava' }] })
+    store.commit('SET_LLM_MODELS', { providerId: 'openai', models: [{ id: 'gpt-4o' }] })
+    expect(store.state.llmModels.ollama).to.deep.equal([{ id: 'llava' }])
+    expect(store.state.llmModels.openai).to.deep.equal([{ id: 'gpt-4o' }])
+    expect(store.state.isDirty).to.equal(false)
+  })
+
+  it('hydrated settings contain llm/chat defaults', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { provider: 'ollama' } })
+    expect(store.state.settings.llm.provider).to.equal('ollama')
+    expect(store.state.settings.llm.baseUrls.openrouter).to.equal('https://openrouter.ai/api/v1')
+    expect(store.state.settings.chat.panelWidth).to.equal(420)
+  })
+})
+
