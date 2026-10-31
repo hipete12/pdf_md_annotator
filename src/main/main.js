@@ -5,43 +5,14 @@ const Store = require('electron-store')
 const log = require('electron-log')
 const { fileURLToPath } = require('url')
 
-// Initialize store for settings
+const { createDefaultSettings, pickSettings } = require('../common/constants')
+
+// Initialize store for settings. User settings live under the top-level keys
+// listed in SETTINGS_KEYS; recentFiles is app state, not a user setting.
 const store = new Store({
   name: 'pdf-annotator-settings',
   defaults: {
-    // Markdown defaults
-    markdown: {
-      fontSize: 14,
-      lineHeight: 1.6,
-      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    },
-    // Annotation box defaults
-    annotationBox: {
-      defaultWidth: 300,
-      defaultHeight: 200,
-      minWidth: 100,
-      minHeight: 50
-    },
-    // LaTeX defaults
-    latex: {
-      macros: {},
-      throwOnError: false
-    },
-    // Keyboard shortcuts
-    shortcuts: {
-      bold: 'Ctrl+B',
-      italic: 'Ctrl+I',
-      underline: 'Ctrl+U',
-      save: 'Ctrl+S',
-      hideAnnotation: 'Ctrl+H'
-    },
-    // UI settings
-    ui: {
-      sidebarWidth: 200,
-      sidebarVisible: true,
-      theme: 'light'
-    },
-    // Recent files
+    ...createDefaultSettings(),
     recentFiles: []
   }
 })
@@ -280,14 +251,14 @@ function openPdfFile(filePath) {
 
 // IPC Handlers
 ipcMain.handle('get-settings', () => {
-  return store.store
+  return pickSettings(store.store)
 })
 
 ipcMain.handle('set-settings', (event, settings) => {
-  Object.entries(settings).forEach(([key, value]) => {
+  Object.entries(pickSettings(settings)).forEach(([key, value]) => {
     store.set(key, value)
   })
-  return store.store
+  return pickSettings(store.store)
 })
 
 ipcMain.handle('get-setting', (event, key) => {

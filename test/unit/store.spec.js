@@ -275,3 +275,63 @@ describe('Vuex Store', () => {
     })
   })
 })
+
+describe('Settings hydration', () => {
+  it('starts with the shared defaults', () => {
+    const store = createTestStore()
+    expect(store.state.settings.annotationBox.minWidth).to.equal(30)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+  })
+
+  it('HYDRATE_SETTINGS does not mark the document dirty', () => {
+    const store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('HYDRATE_SETTINGS', { markdown: { fontSize: 18 } })
+    expect(store.state.isDirty).to.be.false
+    expect(store.state.settings.markdown.fontSize).to.equal(18)
+  })
+
+  it('HYDRATE_SETTINGS keeps nested defaults missing from saved settings', () => {
+    const store = createTestStore()
+    // Shape written by older versions: no listMargin / padding
+    store.commit('HYDRATE_SETTINGS', {
+      markdown: { fontSize: 16, lineHeight: 1.6, fontFamily: 'serif' },
+      annotationBox: { defaultWidth: 250, defaultHeight: 200, minWidth: 100, minHeight: 50 }
+    })
+    expect(store.state.settings.markdown.fontSize).to.equal(16)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+    expect(store.state.settings.annotationBox.padding).to.equal(4)
+  })
+
+  it('loadSettings ignores non-settings keys such as recentFiles', async () => {
+    const ipc = createMockIpc()
+    ipc.invoke = () => Promise.resolve({ markdown: { fontSize: 20 }, recentFiles: ['/x.pdf'] })
+    const store = createTestStore(ipc)
+    await store.dispatch('loadSettings')
+    expect(store.state.settings.markdown.fontSize).to.equal(20)
+    expect(store.state.settings).to.not.have.property('recentFiles')
+    expect(store.state.isDirty).to.be.false
+  })
+
+  it('LOAD_ANNOTATIONS merges document settings per section', () => {
+    const store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('SET_SETTING', { path: 'latex.macros', value: { '\\A': 'a' } })
+    store.commit('LOAD_ANNOTATIONS', {
+      settings: {
+        markdown: { fontSize: 12 },
+        latex: { macros: { '\\B': 'b' } }
+      }
+    })
+    expect(store.state.settings.markdown.fontSize).to.equal(12)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+    expect(store.state.settings.latex.macros).to.deep.equal({ '\\B': 'b' })
+  })
+
+  it('default settings are not shared between store instances', () => {
+    const a = createTestStore()
+    const b = createTestStore()
+    a.commit('SET_SETTING', { path: 'markdown.fontSize', value: 30 })
+    expect(b.state.settings.markdown.fontSize).to.equal(14)
+  })
+})

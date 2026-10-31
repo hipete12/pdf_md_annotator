@@ -1,6 +1,7 @@
 import { createStore } from 'vuex'
 import { markRaw } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
+import { createDefaultSettings, mergeSettings, pickSettings } from '../../common/constants'
 
 // Safely get ipcRenderer - may not be available in browser context
 let defaultIpcRenderer = null
@@ -52,38 +53,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       selectedAnnotation: null,
     
       // Settings
-      settings: {
-        markdown: {
-          fontSize: 14,
-          lineHeight: 1.6,
-          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          listMargin: 0.5,
-          listItemMargin: 0.25
-        },
-        annotationBox: {
-          defaultWidth: 300,
-          defaultHeight: 200,
-          minWidth: 30,
-          minHeight: 20,
-          padding: 4
-        },
-        latex: {
-          macros: {},
-          throwOnError: false
-        },
-        shortcuts: {
-          bold: 'Ctrl+B',
-          italic: 'Ctrl+I',
-          underline: 'Ctrl+U',
-          save: 'Ctrl+S',
-          hideAnnotation: 'Ctrl+H'
-        },
-        ui: {
-          sidebarWidth: 200,
-          sidebarVisible: true,
-          theme: 'light'
-        }
-      },
+      settings: createDefaultSettings(),
     
       // UI state
       settingsModalOpen: false,
@@ -326,9 +296,15 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           state.pdfmarkVersion = data.version || '1.0.0'
           state.concatenatedPdfs = data.concatenatedPdfs || []
         
-          // Merge settings if present
+          // Merge per-document settings section by section, so keys missing
+          // from an older .pdfmark (e.g. markdown.listMargin) keep their
+          // current values while values such as latex.macros still replace.
           if (data.settings) {
-            state.settings = { ...state.settings, ...data.settings }
+            const merged = { ...state.settings }
+            for (const [section, values] of Object.entries(data.settings)) {
+              merged[section] = { ...state.settings[section], ...values }
+            }
+            state.settings = merged
           }
         }
         state.isDirty = false
@@ -392,6 +368,12 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         state.isDirty = true
       },
     
+      // Apply settings loaded from disk on top of the defaults. Not a user
+      // edit, so it must not mark the document as having unsaved changes.
+      HYDRATE_SETTINGS(state, settings) {
+        state.settings = mergeSettings(createDefaultSettings(), pickSettings(settings))
+      },
+    
       SET_SETTINGS(state, settings) {
         state.settings = { ...state.settings, ...settings }
         state.isDirty = true
@@ -448,7 +430,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         if (!ipcRenderer) return
         try {
           const settings = await ipcRenderer.invoke('get-settings')
-          commit('SET_SETTINGS', settings)
+          commit('HYDRATE_SETTINGS', settings)
         } catch (err) {
           console.error('Failed to load settings:', err)
         }
