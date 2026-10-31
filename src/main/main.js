@@ -178,6 +178,11 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+Shift+L',
           click: () => mainWindow?.webContents.send('toggle-chat')
         },
+        {
+          label: 'Add Selection to Chat',
+          accelerator: 'CmdOrCtrl+L',
+          click: () => mainWindow?.webContents.send('chat-attach-selection')
+        },
         { type: 'separator' },
         {
           label: 'Zoom In',

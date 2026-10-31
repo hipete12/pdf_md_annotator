@@ -37,6 +37,7 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - `Ctrl+O`: Open file
   - `Ctrl+\`: Toggle sidebar
   - `Ctrl+Shift+L`: Toggle chat
+  - `Ctrl+L`: Add the current selection (PDF text, note or chat reply) to the chat
 - **Hide/Collapse Annotations**:
   - Press `Ctrl+H` to hide an annotation with a title
   - Shows as a small icon with title when collapsed
@@ -185,8 +186,10 @@ button, or open the branch map (icon next to `+`) to see and jump between all br
 
 **Context.** Every request includes the document text page by page (`[Page N]`). If it is
 larger than the *document text budget*, only the pages nearest the attached context and the
-page in view are sent. Selecting text in the PDF, or clicking a note, shows a dashed chip
-above the message box; click **+** to attach it to your next message.
+page in view are sent. Selecting text in the PDF, clicking a note, or selecting part of an
+earlier reply shows a dashed chip above the message box; click **+** or press `Ctrl+L` to
+attach it to your next message. Chips are colour-coded by source: blue for PDF text, amber
+for notes, purple for replies (formulas in quoted replies are kept as LaTeX).
 
 **Prompt templates.** The system and user templates are editable. Placeholders:
 `{{title}}`, `{{document}}`, `{{selections}}` (attached text/notes) and `{{input}}`.

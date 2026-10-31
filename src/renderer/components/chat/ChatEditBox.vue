@@ -11,10 +11,11 @@
         v-for="context in contexts"
         :key="context.id || context.text"
         class="chat-edit-context"
+        :class="contextClass(context)"
         :title="context.text"
       >
-        <span class="chat-edit-context-kind">{{ context.kind === 'note' ? 'Note' : 'Text' }}</span>
-        <span class="chat-edit-context-page">p. {{ context.page }}</span>
+        <span class="chat-edit-context-kind">{{ contextKindLabel(context) }}</span>
+        <span class="chat-edit-context-page">{{ contextLocation(context) }}</span>
         <span class="chat-edit-context-text">{{ context.text }}</span>
         <button
           class="chat-edit-context-remove"
@@ -60,6 +61,7 @@
 
 <script>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { contextClass, contextKindLabel, contextLocation } from '../../utils/contextChips'
 
 export default {
   name: 'ChatEditBox',
@@ -142,7 +144,7 @@ export default {
       document.removeEventListener('focusin', onDocumentFocusIn, true)
     })
 
-    return { root, input, text, contexts, canSubmit, autoGrow, submit, removeContext, onKeydown }
+    return { root, input, text, contexts, canSubmit, autoGrow, submit, removeContext, onKeydown, contextClass, contextKindLabel, contextLocation }
   }
 }
 </script>
@@ -172,7 +174,7 @@ export default {
   gap: 6px;
   padding: 2px 4px 2px 8px;
   border: 1px solid var(--border-color);
-  border-left: 3px solid var(--primary-color);
+  border-left: 3px solid var(--ctx, var(--primary-color));
   border-radius: 4px;
   font-size: 11px;
   color: var(--text-color);
@@ -181,7 +183,7 @@ export default {
 .chat-edit-context-kind {
   flex: none;
   font-weight: 600;
-  color: var(--primary-color);
+  color: var(--ctx, var(--primary-color));
 }
 
 .chat-edit-context-page {

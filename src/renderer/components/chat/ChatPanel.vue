@@ -204,10 +204,11 @@
           v-for="context in attachedContexts"
           :key="context.id"
           class="chat-chip attached"
+          :class="contextClass(context)"
           :title="context.text"
         >
-          <span class="chat-chip-kind">{{ context.kind === 'note' ? 'Note' : 'Text' }}</span>
-          <span class="chat-chip-page">p. {{ context.page }}</span>
+          <span class="chat-chip-kind">{{ contextKindLabel(context) }}</span>
+          <span class="chat-chip-page">{{ contextLocation(context) }}</span>
           <span class="chat-chip-text">{{ context.text }}</span>
           <button
             class="chat-chip-btn"
@@ -224,7 +225,8 @@
           v-if="pendingContext"
           :key="pendingContext.id"
           class="chat-chip pending"
-          :title="`Attach to your next message:\n${pendingContext.text}`"
+          :class="contextClass(pendingContext)"
+          :title="`Attach to your next message (Ctrl+L):\n${pendingContext.text}`"
           role="button"
           tabindex="0"
           @click="attachContext"
@@ -236,8 +238,8 @@
           >
             <svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" /></svg>
           </span>
-          <span class="chat-chip-kind">{{ pendingContext.kind === 'note' ? 'Note' : 'Selection' }}</span>
-          <span class="chat-chip-page">p. {{ pendingContext.page }}</span>
+          <span class="chat-chip-kind">{{ contextKindLabel(pendingContext, { pending: true }) }}</span>
+          <span class="chat-chip-page">{{ contextLocation(pendingContext) }}</span>
           <span class="chat-chip-text">{{ pendingContext.text }}</span>
           <button
             class="chat-chip-btn"
@@ -342,6 +344,7 @@ import ChatSessionList from './ChatSessionList.vue'
 import ChatModelPicker from './ChatModelPicker.vue'
 import ChatBranchMap from './ChatBranchMap.vue'
 import { describePageRanges } from '../../utils/chatPrompt'
+import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
 
 const MIN_WIDTH = 300
 const DEFAULT_WIDTH = 420
@@ -390,22 +393,48 @@ export default {
     // Text selected in the PDF's text layer becomes the pending chip. It is
     // only replaced by the next selection, not cleared when the selection
     // collapses (clicking into the chat panel always collapses it).
+    const clip = (text) => (text.length > MAX_CONTEXT_CHARS ? `${text.slice(0, MAX_CONTEXT_CHARS)}…` : text)
+
+    // A selection that is already attached must not replace the pending chip
+    // (e.g. a PDF selection still active after a note was clicked)
+    const isAttached = (candidate) => attachedContexts.value.some(c => c.kind === candidate.kind && c.text === candidate.text &&
+      (c.pageId ?? null) === (candidate.pageId ?? null) && (c.messageId ?? null) === (candidate.messageId ?? null))
+
+    // Text selected in an assistant reply becomes a "Reply" chip
+    const captureReplySelection = (selection, answer) => {
+      const messageId = answer.closest('[data-message-id]')?.dataset.messageId
+      const message = messages.value.find(m => m.id === messageId)
+      if (!message) return
+      const text = clip(rangeToText(selection.getRangeAt(0)))
+      if (!text) return
+      const pending = pendingContext.value
+      if (pending?.kind === 'reply' && pending.text === text && pending.messageId === messageId) return
+      if (isAttached({ kind: 'reply', text, messageId })) return
+      // Turn number = how many user messages lead up to this reply
+      const index = messages.value.indexOf(message)
+      const turn = messages.value.slice(0, index).filter(m => m.role === 'user').length
+      store.dispatch('chat/setPendingContext', { kind: 'reply', messageId, turn, text })
+    }
+
     const captureSelection = () => {
       const selection = window.getSelection()
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+      const start = elementOf(selection.getRangeAt(0).startContainer)
+      const answer = start?.closest('.chat-message-assistant .chat-answer')
+      if (answer) return captureReplySelection(selection, answer)
+
       const container = document.querySelector('.pdf-pages-container')
       // Ctrl+A selects the whole document, which is already in the prompt
       if (!container || container.classList.contains('pdf-select-all-mode')) return
-      const start = elementOf(selection.getRangeAt(0).startContainer)
       if (!start?.closest('.textLayer')) return
       const pageId = Number(start.closest('.pdf-page-wrapper')?.dataset.page)
       if (!pageId) return
 
-      let text = selection.toString().replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim()
+      const text = clip(selection.toString().replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim())
       if (!text) return
-      if (text.length > MAX_CONTEXT_CHARS) text = `${text.slice(0, MAX_CONTEXT_CHARS)}…`
       const pending = pendingContext.value
       if (pending?.kind === 'text' && pending.text === text && pending.pageId === pageId) return
+      if (isAttached({ kind: 'text', text, pageId })) return
       store.dispatch('chat/setPendingContext', { kind: 'text', page: displayPage(pageId), pageId, text })
     }
 
@@ -437,13 +466,24 @@ export default {
         if (!text || attachedContexts.value.some(c => c.noteId === noteId)) return
         const pageId = findNotePage(noteId)
         store.dispatch('chat/setPendingContext', { kind: 'note', noteId, page: displayPage(pageId), pageId, text })
-      }
+      },
+      // Also when the panel opens with a note already selected (Ctrl+L)
+      { immediate: true }
     )
 
     const attachContext = () => {
       store.dispatch('chat/attachPendingContext')
       input.value?.focus()
     }
+
+    // Ctrl+L (View > Add Selection to Chat): capture the selection now,
+    // without waiting for the selection delay, and attach it
+    const attachSelectionNow = () => {
+      clearTimeout(selectionTimer)
+      captureSelection()
+      if (pendingContext.value) attachContext()
+    }
+    window.addEventListener('chat:attach-selection', attachSelectionNow)
     const dismissPending = () => store.dispatch('chat/setPendingContext', null)
     const removeContext = (id) => store.dispatch('chat/removeAttachedContext', id)
 
@@ -578,6 +618,12 @@ export default {
 
     // Jump back to where an attached context came from
     const openContext = (context) => {
+      if (context.kind === 'reply') {
+        // Scroll to the quoted reply if it is on the visible branch
+        scroller.value?.querySelector(`[data-message-id="${context.messageId}"]`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+        return
+      }
       if (context.pageId) store.commit('REQUEST_PAGE_SCROLL', context.pageId)
       if (context.kind === 'note' && context.noteId) store.dispatch('selectAnnotation', context.noteId)
       if (fullscreen.value) store.dispatch('chat/setFullscreen', false)
@@ -654,6 +700,7 @@ export default {
 
     onUnmounted(() => {
       document.removeEventListener('selectionchange', onSelectionChange)
+      window.removeEventListener('chat:attach-selection', attachSelectionNow)
       clearTimeout(selectionTimer)
       window.removeEventListener('resize', onWindowResize)
       if (resizing.value) stopResize()
@@ -687,6 +734,9 @@ export default {
     scrollToBottom()
 
     return {
+      contextClass,
+      contextKindLabel,
+      contextLocation,
       showBranches,
       openBranch,
       onComposerKeydown,
@@ -995,13 +1045,13 @@ export default {
 
 .chat-chip.attached {
   border: 1px solid var(--border-color);
-  border-left: 3px solid var(--primary-color);
+  border-left: 3px solid var(--ctx, var(--primary-color));
   background: var(--annotation-bg);
   box-shadow: var(--shadow-sm);
 }
 
 .chat-chip.pending {
-  border: 1px dashed var(--text-muted);
+  border: 1px dashed var(--ctx, var(--text-muted));
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -1010,7 +1060,7 @@ export default {
 
 .chat-chip.pending:hover,
 .chat-chip.pending:focus-visible {
-  border-color: var(--primary-color);
+  border-style: solid;
   color: var(--text-color);
   outline: none;
 }
@@ -1023,7 +1073,7 @@ export default {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  background: var(--primary-color);
+  background: var(--ctx, var(--primary-color));
   color: #fff;
 }
 
@@ -1039,8 +1089,8 @@ export default {
   font-size: 11px;
 }
 
-.chat-chip.attached .chat-chip-kind {
-  color: var(--primary-color);
+.chat-chip .chat-chip-kind {
+  color: var(--ctx, var(--primary-color));
 }
 
 .chat-chip-page {

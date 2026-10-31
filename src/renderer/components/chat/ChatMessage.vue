@@ -21,11 +21,12 @@
         v-for="context in message.contexts"
         :key="context.id || context.text"
         class="chat-context-ref"
-        :title="`Go to page ${context.page}`"
+        :class="contextClass(context)"
+        :title="context.kind === 'reply' ? 'Go to the quoted reply' : `Go to page ${context.page}`"
         @click="$emit('open-context', context)"
       >
-        <span class="chat-context-ref-kind">{{ context.kind === 'note' ? 'Note' : 'Text' }}</span>
-        <span class="chat-context-ref-page">p. {{ context.page }}</span>
+        <span class="chat-context-ref-kind">{{ contextKindLabel(context) }}</span>
+        <span class="chat-context-ref-page">{{ contextLocation(context) }}</span>
         <span class="chat-context-ref-text">{{ context.text }}</span>
       </button>
     </div>
@@ -220,6 +221,7 @@ import { computed, ref } from 'vue'
 import { useStore } from 'vuex'
 import { renderMarkdown } from '../../utils/markdown'
 import ChatEditBox from './ChatEditBox.vue'
+import { contextClass, contextKindLabel, contextLocation } from '../../utils/contextChips'
 
 let clipboard = null
 try {
@@ -264,7 +266,7 @@ export default {
       setTimeout(() => { copied.value = false }, 1200)
     }
 
-    return { rendered, copied, copy, confirmingDelete }
+    return { rendered, copied, copy, confirmingDelete, contextClass, contextKindLabel, contextLocation }
   }
 }
 </script>
@@ -308,7 +310,7 @@ export default {
   max-width: 100%;
   padding: 3px 8px;
   border: 1px solid var(--border-color);
-  border-left: 3px solid var(--primary-color);
+  border-left: 3px solid var(--ctx, var(--primary-color));
   border-radius: 4px;
   background: var(--annotation-bg);
   color: var(--text-color);
@@ -318,12 +320,12 @@ export default {
 }
 
 .chat-context-ref:hover {
-  border-color: var(--primary-color);
+  border-color: var(--ctx, var(--primary-color));
 }
 
 .chat-context-ref-kind {
   font-weight: 600;
-  color: var(--primary-color);
+  color: var(--ctx, var(--primary-color));
 }
 
 .chat-context-ref-page {

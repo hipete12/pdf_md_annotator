@@ -64,7 +64,7 @@
 </template>
 
 <script>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useStore } from 'vuex'
 import * as pdfjsLib from 'pdfjs-dist'
 import Sidebar from './components/Sidebar.vue'
@@ -287,6 +287,16 @@ export default {
     const handleToggleChat = () => {
       if (pdfDocument.value) toggleChat()
     }
+    // Ctrl+L: attach the current selection (PDF text, reply or selected note)
+    // to the next chat message, opening the chat first if needed
+    const handleAttachSelection = async () => {
+      if (!pdfDocument.value) return
+      if (!chatVisible.value) {
+        toggleChat()
+        await nextTick()
+      }
+      window.dispatchEvent(new Event('chat:attach-selection'))
+    }
     
     // Lifecycle
     onMounted(() => {
@@ -304,6 +314,7 @@ export default {
         ipcRenderer.on('zoom-reset', handleZoomReset)
         ipcRenderer.on('open-settings', handleOpenSettings)
         ipcRenderer.on('toggle-chat', handleToggleChat)
+        ipcRenderer.on('chat-attach-selection', handleAttachSelection)
       }
       
       // Global keyboard shortcuts
@@ -326,6 +337,7 @@ export default {
         ipcRenderer.removeListener('zoom-reset', handleZoomReset)
         ipcRenderer.removeListener('open-settings', handleOpenSettings)
         ipcRenderer.removeListener('toggle-chat', handleToggleChat)
+        ipcRenderer.removeListener('chat-attach-selection', handleAttachSelection)
       }
       
       window.removeEventListener('keydown', handleGlobalKeydown)

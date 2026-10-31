@@ -17,6 +17,10 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
   --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
   --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  /* Chat context chip colours by source */
+  --context-text: #2563eb;
+  --context-note: #d97706;
+  --context-reply: #7c3aed;
 }
 
 /* Dark theme */
@@ -28,6 +32,9 @@
   --text-muted: #94a3b8;
   --annotation-bg: #1e293b;
   --annotation-border: #475569;
+  --context-text: #60a5fa;
+  --context-note: #fbbf24;
+  --context-reply: #a78bfa;
 }
 
 * {
@@ -865,3 +872,8 @@ body {
 .gap-4 {
   gap: 16px;
 }
+
+/* Chat context chips: --ctx is the colour of the snippet's source */
+.ctx-text { --ctx: var(--context-text); }
+.ctx-note { --ctx: var(--context-note); }
+.ctx-reply { --ctx: var(--context-reply); }

@@ -23,7 +23,7 @@ export function fillTemplate(template, vars) {
   )
 }
 
-const CONTEXT_KIND_LABELS = { text: 'selected text', note: 'user note' }
+const CONTEXT_KIND_LABELS = { text: 'selected text', note: 'user note', reply: 'from your earlier reply' }
 
 /**
  * Format attached contexts for {{selections}}; empty string when none.
@@ -33,7 +33,9 @@ export function formatSelections(contexts) {
   if (!contexts || contexts.length === 0) return ''
   const entries = contexts.map(c => {
     const label = CONTEXT_KIND_LABELS[c.kind] || c.kind
-    const where = c.page ? `p. ${c.page}, ` : ''
+    const where = c.kind === 'reply'
+      ? (c.turn ? `turn ${c.turn}, ` : '')
+      : (c.page ? `p. ${c.page}, ` : '')
     return `[${where}${label}]\n${String(c.text || '').trim()}`
   })
   return `<selected_context>\n${entries.join('\n\n')}\n</selected_context>`

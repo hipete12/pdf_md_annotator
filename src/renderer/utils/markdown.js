@@ -102,9 +102,12 @@ export function renderMath(math, displayMode = false, macros = {}) {
       strict: false
     })
     
-    const result = displayMode 
-      ? `<div class="math-block">${html}</div>`
-      : `<span class="math-inline">${html}</span>`
+    // data-tex keeps the source so copied/quoted selections can use TeX
+    // instead of the rendered glyphs (DOMPurify drops KaTeX's <annotation>)
+    const tex = escapeHtml(math)
+    const result = displayMode
+      ? `<div class="math-block" data-tex="${tex}">${html}</div>`
+      : `<span class="math-inline" data-tex="${tex}">${html}</span>`
     
     mathCache.set(cacheKey, result)
     return result

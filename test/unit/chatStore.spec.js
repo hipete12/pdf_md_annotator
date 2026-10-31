@@ -431,10 +431,15 @@ describe('Context chips', () => {
     attach({ kind: 'text', page: 2, pageId: 2, text: 'same' })
     attach({ kind: 'note', page: 1, pageId: 1, noteId: 'n1', text: 'v1' })
     attach({ kind: 'note', page: 1, pageId: 1, noteId: 'n1', text: 'v2' })
-    expect(chat(store).attachedContexts.map(c => `${c.kind}:${c.pageId}:${c.text}`)).to.deep.equal(['text:1:same', 'text:2:same', 'note:1:v1'])
+    attach({ kind: 'reply', messageId: 'm1', turn: 1, text: 'quoted' })
+    attach({ kind: 'reply', messageId: 'm1', turn: 1, text: 'quoted' })
+    attach({ kind: 'reply', messageId: 'm2', turn: 2, text: 'quoted' })
+    expect(chat(store).attachedContexts.map(c => `${c.kind}:${c.pageId ?? c.messageId}:${c.text}`)).to.deep.equal([
+      'text:1:same', 'text:2:same', 'note:1:v1', 'reply:m1:quoted', 'reply:m2:quoted'
+    ])
     expect(chat(store).pendingContext).to.equal(null)
     store.dispatch('chat/removeAttachedContext', chat(store).attachedContexts[0].id)
-    expect(chat(store).attachedContexts).to.have.length(2)
+    expect(chat(store).attachedContexts).to.have.length(4)
   })
 
   it('sends contexts without any typed text', async () => {

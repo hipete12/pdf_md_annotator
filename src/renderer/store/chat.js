@@ -207,7 +207,9 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       ATTACH_CONTEXT(state, context) {
         const duplicate = state.attachedContexts.some(c =>
           c.kind === context.kind && c.pageId === context.pageId &&
-          (context.kind === 'note' ? c.noteId === context.noteId : c.text === context.text))
+          (context.kind === 'note'
+            ? c.noteId === context.noteId
+            : c.text === context.text && (c.messageId ?? null) === (context.messageId ?? null)))
         if (!duplicate) state.attachedContexts.push(context)
       },
       REMOVE_ATTACHED(state, id) {
