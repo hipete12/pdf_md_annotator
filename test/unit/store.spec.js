@@ -378,3 +378,86 @@ describe('Saving .pdfmark', () => {
     expect(store.state.pdfmarkCreated).to.be.null
   })
 })
+
+describe('Undo / Redo', () => {
+  let store
+  const allAnnotations = () => Object.values(store.state.annotations).flat()
+
+  beforeEach(() => {
+    store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 3 }, path: '/a.pdf' })
+  })
+
+  it('undoes and redoes creating an annotation', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+
+    store.dispatch('undo')
+    expect(allAnnotations()).to.have.length(0)
+
+    store.dispatch('redo')
+    expect(store.state.annotations[1].map(a => a.id)).to.deep.equal([id])
+  })
+
+  it('undoes and redoes deleting an annotation', () => {
+    store.dispatch('createAnnotation', { pageIndex: 2, x: 10, y: 20 })
+    const id = store.state.annotations[2][0].id
+    store.dispatch('deleteAnnotation', id)
+    expect(allAnnotations()).to.have.length(0)
+
+    store.dispatch('undo')
+    expect(store.state.annotations[2].map(a => a.id)).to.deep.equal([id])
+
+    store.dispatch('redo')
+    expect(allAnnotations()).to.have.length(0)
+  })
+
+  it('undoes and redoes an update', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('updateAnnotation', { id, updates: { content: 'hello' } })
+
+    store.dispatch('undo')
+    expect(store.getters.annotationById(id).content).to.equal('')
+
+    store.dispatch('redo')
+    expect(store.getters.annotationById(id).content).to.equal('hello')
+  })
+
+  it('can redo several steps in a row', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('updateAnnotation', { id, updates: { content: 'one' } })
+    store.dispatch('updateAnnotation', { id, updates: { content: 'two' } })
+
+    store.dispatch('undo')
+    store.dispatch('undo')
+    store.dispatch('undo')
+    expect(allAnnotations()).to.have.length(0)
+    expect(store.state.redoStack).to.have.length(3)
+
+    store.dispatch('redo')
+    store.dispatch('redo')
+    store.dispatch('redo')
+    expect(store.getters.annotationById(id).content).to.equal('two')
+    expect(store.state.redoStack).to.have.length(0)
+    expect(store.state.undoStack).to.have.length(3)
+  })
+
+  it('clears the redo stack when a new action is performed', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    store.dispatch('undo')
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 30, y: 40 })
+    expect(store.state.redoStack).to.have.length(0)
+  })
+
+  it('does not share annotation objects with the history stacks', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('undo')
+    store.dispatch('redo')
+    store.commit('UPDATE_ANNOTATION', { id, updates: { content: 'changed' } })
+    expect(store.state.redoStack).to.have.length(0)
+    expect(store.state.undoStack[0].annotation.content).to.equal('')
+  })
+})

@@ -11,6 +11,9 @@ try {
   console.warn('Running outside Electron context')
 }
 
+// Plain deep copy for annotation snapshots kept in the undo/redo history
+const clone = (value) => JSON.parse(JSON.stringify(value))
+
 // Debounce helper for auto-save
 function debounce(fn, delay) {
   let timeoutId
@@ -407,18 +410,36 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
         state.isDirty = false
       },
     
+      // Re-insert an annotation (undo of delete / redo of create)
+      INSERT_ANNOTATION(state, { pageIndex, annotation }) {
+        if (!state.annotations[pageIndex]) {
+          state.annotations[pageIndex] = []
+        }
+        state.annotations[pageIndex].push(clone(annotation))
+        state.isDirty = true
+      },
+    
       // Undo/Redo mutations
+      // Record a new user action; this invalidates anything that could be redone
       PUSH_UNDO(state, action) {
         state.undoStack.push(action)
         if (state.undoStack.length > state.maxUndoSteps) {
           state.undoStack.shift()
         }
-        // Clear redo stack when new action is performed
         state.redoStack = []
       },
     
+      // Move an action back onto the undo stack during redo (keeps redoStack)
+      RESTORE_UNDO(state, action) {
+        state.undoStack.push(action)
+        if (state.undoStack.length > state.maxUndoSteps) {
+          state.undoStack.shift()
+        }
+      },
+    
+      // Vuex commits cannot return values: read the top entry first, then pop
       POP_UNDO(state) {
-        return state.undoStack.pop()
+        state.undoStack.pop()
       },
     
       PUSH_REDO(state, action) {
@@ -426,7 +447,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       },
     
       POP_REDO(state) {
-        return state.redoStack.pop()
+        state.redoStack.pop()
       },
     
       CLEAR_HISTORY(state) {
@@ -515,7 +536,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           commit('PUSH_UNDO', {
             type: 'CREATE_ANNOTATION',
             pageIndex,
-            annotation: JSON.parse(JSON.stringify(newAnnotation))
+            annotation: clone(newAnnotation)
           })
         }
       },
@@ -528,8 +549,8 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
             commit('PUSH_UNDO', {
               type: 'UPDATE_ANNOTATION',
               id,
-              previousState: JSON.parse(JSON.stringify(annotation)),
-              newState: { ...annotation, ...updates }
+              previousState: clone(annotation),
+              newState: clone({ ...annotation, ...updates })
             })
           }
         }
@@ -555,7 +576,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           commit('PUSH_UNDO', {
             type: 'DELETE_ANNOTATION',
             pageIndex,
-            annotation: JSON.parse(JSON.stringify(annotation))
+            annotation: clone(annotation)
           })
         }
       
@@ -567,31 +588,30 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       undo({ commit, dispatch, state }) {
         if (state.undoStack.length === 0) return
       
-        const action = state.undoStack.pop()
+        const action = state.undoStack[state.undoStack.length - 1]
+        commit('POP_UNDO')
+        commit('PUSH_REDO', action)
       
         switch (action.type) {
           case 'CREATE_ANNOTATION':
             // Undo create = delete the annotation
-            commit('PUSH_REDO', action)
             commit('DELETE_ANNOTATION', action.annotation.id)
             break
           
           case 'UPDATE_ANNOTATION':
             // Undo update = restore previous state
-            commit('PUSH_REDO', action)
             commit('UPDATE_ANNOTATION', {
               id: action.id,
-              updates: action.previousState
+              updates: clone(action.previousState)
             })
             break
           
           case 'DELETE_ANNOTATION':
             // Undo delete = recreate the annotation
-            commit('PUSH_REDO', action)
-            if (!state.annotations[action.pageIndex]) {
-              state.annotations[action.pageIndex] = []
-            }
-            state.annotations[action.pageIndex].push(action.annotation)
+            commit('INSERT_ANNOTATION', {
+              pageIndex: action.pageIndex,
+              annotation: action.annotation
+            })
             break
         }
       
@@ -602,30 +622,29 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       redo({ commit, dispatch, state }) {
         if (state.redoStack.length === 0) return
       
-        const action = state.redoStack.pop()
+        const action = state.redoStack[state.redoStack.length - 1]
+        commit('POP_REDO')
+        commit('RESTORE_UNDO', action)
       
         switch (action.type) {
           case 'CREATE_ANNOTATION':
             // Redo create = recreate the annotation
-            commit('PUSH_UNDO', action)
-            if (!state.annotations[action.pageIndex]) {
-              state.annotations[action.pageIndex] = []
-            }
-            state.annotations[action.pageIndex].push(action.annotation)
+            commit('INSERT_ANNOTATION', {
+              pageIndex: action.pageIndex,
+              annotation: action.annotation
+            })
             break
           
           case 'UPDATE_ANNOTATION':
             // Redo update = apply new state
-            commit('PUSH_UNDO', action)
             commit('UPDATE_ANNOTATION', {
               id: action.id,
-              updates: action.newState
+              updates: clone(action.newState)
             })
             break
           
           case 'DELETE_ANNOTATION':
             // Redo delete = delete again
-            commit('PUSH_UNDO', action)
             commit('DELETE_ANNOTATION', action.annotation.id)
             break
         }
