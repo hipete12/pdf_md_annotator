@@ -19,6 +19,21 @@ export const LLM_PROVIDERS = Object.freeze({
     requiresKey: true,
     local: false
   },
+  opencodego: {
+    id: 'opencodego',
+    label: 'OpenCode Go',
+    baseUrl: 'https://opencode.ai/inference/go/openai/v1',
+    // Model list is not under the chat base URL
+    modelsUrl: 'https://opencode.ai/inference/go/v1/models',
+    // The model list is public, so models can be browsed before adding a
+    // key (a saved key is still sent, which validates it)
+    publicModels: true,
+    requiresKey: true,
+    local: false,
+    // Go rejects chat requests without a stable per-conversation session id
+    // (error type MissingSessionID); it uses it for routing and prompt caching
+    sessionHeader: 'x-opencode-session'
+  },
   ollama: {
     id: 'ollama',
     label: 'Ollama (local)',
@@ -98,11 +113,16 @@ export function normalizeModelList(body) {
     if (!id) continue
     if (NON_CHAT_PATTERNS.some(re => re.test(id.toLowerCase()))) continue
 
-    const modalities = item?.architecture?.input_modalities
+    // Skip entries that declare a non-chat type (e.g. embeddings)
+    if (typeof item?.type === 'string' && !['chat', 'llm', 'vlm'].includes(item.type)) continue
+
+    // OpenRouter: architecture.input_modalities ['text', 'image'];
+    // OpenCode: modalities.input ['text', 'image/jpeg', ...]
+    const modalities = item?.architecture?.input_modalities || item?.modalities?.input
     let vision
     let visionSource
     if (Array.isArray(modalities)) {
-      vision = modalities.includes('image')
+      vision = modalities.some(m => typeof m === 'string' && m.startsWith('image'))
       visionSource = 'provider'
     } else {
       vision = guessVisionSupport(id)
@@ -112,7 +132,7 @@ export function normalizeModelList(body) {
     models.push({
       id,
       name: item?.name || id,
-      contextLength: Number(item?.context_length) || null,
+      contextLength: Number(item?.context_length || item?.limit?.context) || null,
       vision,
       visionSource
     })
@@ -258,6 +278,20 @@ export function describeNetworkError(err, baseUrl, provider) {
     return { code: 'connection', message: `Could not resolve the host for ${baseUrl}. Check the URL and your connection.` }
   }
   return { code: 'network', message: `Network error contacting ${baseUrl}: ${err?.cause?.message || err?.message || err}` }
+}
+
+/**
+ * URL of the model list for a provider. Usually <baseUrl>/models; OpenCode Go
+ * serves it from .../go/v1/models while chat lives under .../go/openai/v1.
+ */
+export function getModelsUrl(provider, baseUrl) {
+  if (provider?.modelsUrl) {
+    if (!baseUrl || baseUrl.replace(/\/+$/, '') === provider.baseUrl) return provider.modelsUrl
+    if (provider.id === 'opencodego' && /\/openai\/v1\/?$/.test(baseUrl)) {
+      return baseUrl.replace(/\/openai\/v1\/?$/, '/v1/models')
+    }
+  }
+  return joinUrl(baseUrl, 'models')
 }
 
 /**

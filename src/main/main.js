@@ -21,6 +21,7 @@ const store = new Store({
 })
 
 const secrets = createSecrets(store)
+const LLM_USER_AGENT = `PDF-Annotator/${app.getVersion()}`
 
 let mainWindow = null
 let currentPdfPath = null
@@ -514,7 +515,7 @@ ipcMain.handle('llm:set-key', (event, { providerId, apiKey }) => {
 
 ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
   try {
-    const models = await listModels({ providerId, baseUrl, apiKey: secrets.getKey(providerId) })
+    const models = await listModels({ providerId, baseUrl, apiKey: secrets.getKey(providerId), userAgent: LLM_USER_AGENT })
     return { success: true, models }
   } catch (err) {
     return { success: false, code: err.code || 'unknown', error: err.message }
@@ -525,7 +526,7 @@ ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
 // llm:chat-delta / llm:chat-done / llm:chat-error events carrying it.
 const activeChats = new Map()
 
-ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature }) => {
+ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature, sessionId }) => {
   if (!requestId || activeChats.has(requestId)) return { started: false, error: 'Invalid request id' }
 
   const controller = new AbortController()
@@ -542,6 +543,8 @@ ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model
     model,
     messages,
     temperature,
+    sessionId,
+    userAgent: LLM_USER_AGENT,
     signal: controller.signal,
     onEvent: (e) => {
       if (e.type === 'delta') send('llm:chat-delta', { content: e.content, reasoning: e.reasoning })

@@ -23,7 +23,7 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - Error display for invalid LaTeX
 - **Code Highlighting**: Syntax highlighting for 20+ programming languages
 - **AI Chat** (`Ctrl+Shift+L`): chat about the open PDF with an LLM
-  - OpenRouter, OpenAI, local Ollama / LM Studio, or any OpenAI-compatible API
+  - OpenRouter, OpenAI, OpenCode Go, local Ollama / LM Studio, or any OpenAI-compatible API
   - The document text is included automatically; select text or click a note to attach it as context
   - Multiple sessions per document, resizable panel, full-screen mode
   - Optional page images for vision-capable models
@@ -161,9 +161,13 @@ Open **Settings → AI Chat**, pick a provider and load its models:
 |----------|--------------------|---------|
 | OpenRouter | `https://openrouter.ai/api/v1` | required |
 | OpenAI | `https://api.openai.com/v1` | required |
+| OpenCode Go | `https://opencode.ai/inference/go/openai/v1` | required (models list is public) |
 | Ollama | `http://localhost:11434/v1` | – (run `ollama serve`) |
 | LM Studio | `http://localhost:1234/v1` | – (start the local server) |
 | Custom | any OpenAI-compatible `/v1` endpoint | optional |
+
+OpenCode Go requires a stable session id per conversation; the app sends the chat
+session's id in the `x-opencode-session` header (requests without it are rejected).
 
 API keys are encrypted with the OS keychain (Electron `safeStorage`) and never leave
 the main process. On Linux without a keyring (GNOME Keyring / KWallet) the key is only

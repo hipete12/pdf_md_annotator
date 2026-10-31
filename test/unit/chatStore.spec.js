@@ -78,6 +78,8 @@ describe('Chat store', () => {
 
     const start = ipc.lastCall('llm:chat-start').payload
     expect(start).to.include({ providerId: 'custom', baseUrl: 'http://fake/v1', model: 'test-model', temperature: 0.3 })
+    // the chat session id is sent so providers can route/cache per conversation
+    expect(start.sessionId).to.equal(store.state.chat.activeSessionId)
     expect(start.messages[0].role).to.equal('system')
     expect(start.messages[0].content).to.include('[Page 1]\nPage one text\n\n[Page 2]\nPage two text')
     expect(start.messages[0].content).to.include('"paper.pdf"')

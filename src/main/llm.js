@@ -8,7 +8,8 @@ const {
   createSseParser,
   describeHttpError,
   describeNetworkError,
-  joinUrl
+  joinUrl,
+  getModelsUrl
 } = require('../common/llm')
 
 const APP_REFERER = 'https://github.com/hipete12/pdf_md_annotator'
@@ -27,9 +28,16 @@ function getProvider(providerId) {
   return provider
 }
 
-function buildHeaders(provider, apiKey) {
-  const headers = { 'Content-Type': 'application/json' }
+const DEFAULT_USER_AGENT = 'PDF-Annotator'
+
+function buildHeaders(provider, apiKey, { userAgent, sessionId } = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    // Identify the app rather than the HTTP library (OpenCode asks for this)
+    'User-Agent': userAgent || DEFAULT_USER_AGENT
+  }
   if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  if (provider.sessionHeader && sessionId) headers[provider.sessionHeader] = sessionId
   if (provider.id === 'openrouter') {
     headers['HTTP-Referer'] = APP_REFERER
     headers['X-Title'] = APP_TITLE
@@ -37,11 +45,11 @@ function buildHeaders(provider, apiKey) {
   return headers
 }
 
-async function request(provider, baseUrl, path, options) {
+async function request(provider, baseUrl, url, options) {
   if (!baseUrl) throw new LlmError({ code: 'config', message: 'No base URL configured for this provider' })
   let response
   try {
-    response = await fetch(joinUrl(baseUrl, path), options)
+    response = await fetch(url, options)
   } catch (err) {
     throw new LlmError(describeNetworkError(err, baseUrl, provider))
   }
@@ -95,16 +103,16 @@ async function enrichLocalVision(provider, baseUrl, models, signal) {
  * List chat models for a provider.
  * @returns {Promise<Array>} normalized models (see normalizeModelList)
  */
-async function listModels({ providerId, baseUrl, apiKey, timeoutMs = 15000 }) {
+async function listModels({ providerId, baseUrl, apiKey, userAgent, timeoutMs = 15000 }) {
   const provider = getProvider(providerId)
-  if (provider.requiresKey && !apiKey) {
+  if (provider.requiresKey && !provider.publicModels && !apiKey) {
     throw new LlmError({ code: 'auth', message: `Add your ${provider.label} API key first` })
   }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
-    const response = await request(provider, baseUrl, 'models', {
-      headers: buildHeaders(provider, apiKey),
+    const response = await request(provider, baseUrl, getModelsUrl(provider, baseUrl), {
+      headers: buildHeaders(provider, apiKey, { userAgent }),
       signal: controller.signal
     })
     const models = normalizeModelList(await response.json())
@@ -129,23 +137,28 @@ async function listModels({ providerId, baseUrl, apiKey, timeoutMs = 15000 }) {
  * @param {string} params.model
  * @param {Array} params.messages - OpenAI-format messages
  * @param {number} [params.temperature]
+ * @param {string} [params.sessionId] - stable id of the conversation (sent when the provider needs it)
+ * @param {string} [params.userAgent]
  * @param {AbortSignal} [params.signal]
  * @param {(event: object) => void} params.onEvent - receives parser events
  * @returns {Promise<{ content: string, reasoning: string, model: string|null, usage: object|null, finishReason: string|null }>}
  */
-async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, signal, onEvent }) {
+async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, sessionId, userAgent, signal, onEvent }) {
   const provider = getProvider(providerId)
   if (provider.requiresKey && !apiKey) {
     throw new LlmError({ code: 'auth', message: `Add your ${provider.label} API key in Settings` })
   }
   if (!model) throw new LlmError({ code: 'config', message: 'Choose a model in Settings first' })
+  if (provider.sessionHeader && !sessionId) {
+    throw new LlmError({ code: 'config', message: `${provider.label} requires a session id` })
+  }
 
   const body = { model, messages, stream: true }
   if (typeof temperature === 'number') body.temperature = temperature
 
-  const response = await request(provider, baseUrl, 'chat/completions', {
+  const response = await request(provider, baseUrl, joinUrl(baseUrl, 'chat/completions'), {
     method: 'POST',
-    headers: buildHeaders(provider, apiKey),
+    headers: buildHeaders(provider, apiKey, { userAgent, sessionId }),
     body: JSON.stringify(body),
     signal
   })

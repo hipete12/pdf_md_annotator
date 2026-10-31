@@ -363,7 +363,10 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           baseUrl: llm.baseUrls?.[providerId],
           model,
           messages,
-          temperature: llm.temperature
+          temperature: llm.temperature,
+          // Stable per conversation: providers such as OpenCode Go route and
+          // cache prompts by it
+          sessionId
         })
         if (!started?.started) return fail('start', started?.error || 'Could not start the request')
         return true

@@ -558,7 +558,11 @@ export default {
     })
 
     // --- Formatting --------------------------------------------------------
-    const formatTokens = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : `${n}`)
+    const formatTokens = (n) => {
+      if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+      if (n >= 1000) return `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
+      return `${n}`
+    }
     // Context window of the selected model, when the provider reports it
     const contextLength = computed(() => {
       const model = (store.state.llmModels[llm.value.provider] || []).find(m => m.id === modelId.value)
