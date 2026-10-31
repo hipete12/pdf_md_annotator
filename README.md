@@ -28,6 +28,7 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - `Ctrl+U`: Underline
   - `Ctrl+H`: Hide/show annotation
   - `Ctrl+S`: Save
+  - `Ctrl+Shift+S`: Save As (copies the PDF and its annotations to a new name)
   - `Ctrl+O`: Open file
   - `Ctrl+\`: Toggle sidebar
 - **Hide/Collapse Annotations**:
@@ -169,7 +170,7 @@ app-build/          # Webpack output (generated)
 dist/               # electron-builder output (generated)
 
 test/
-├── unit/           # Unit tests (Karma + Mocha)
+├── unit/           # Unit tests (Mocha in Node, bundled with webpack: npm test)
 └── e2e/            # E2E tests (Playwright)
 
 static/             # Static assets and application icons
