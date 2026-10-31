@@ -9,6 +9,7 @@ const path = require('path')
 const webpack = require('webpack')
 const Mocha = require('mocha')
 const chai = require('chai')
+const { JSDOM } = require('jsdom')
 const rendererConfig = require('../webpack.renderer.config')
 
 const root = path.resolve(__dirname, '..')
@@ -51,6 +52,14 @@ compiler.run((err, stats) => {
   global.expect = chai.expect
   const mocha = new Mocha({ timeout: 10000 })
   for (const name of Object.keys(entry)) mocha.addFile(path.join(outDir, `${name}.js`))
+
+  // Load the specs before creating the DOM: libraries such as Prism pick a
+  // browser or Node mode at import time and break with a partial DOM. Code that
+  // needs a window lazily (DOMPurify in utils/markdown.js) gets it afterwards.
+  mocha.loadFiles()
+  mocha.lazyLoadFiles(true)
+  global.window = new JSDOM('<!doctype html><html><body></body></html>').window
+
   mocha.run(failures => {
     process.exitCode = failures ? 1 : 0
   })

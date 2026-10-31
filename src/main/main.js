@@ -42,6 +42,19 @@ function findPdfArgument(argv, startIndex = 1, baseDir) {
   return null
 }
 
+function openExternalIfSafe(url) {
+  try {
+    const { protocol } = new URL(url)
+    if (protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:') {
+      shell.openExternal(url)
+    } else {
+      log.warn('Blocked opening URL with protocol', protocol)
+    }
+  } catch {
+    log.warn('Blocked opening invalid URL')
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -76,6 +89,21 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  // Rendered markdown (notes, chat replies) can contain links. Never open
+  // them inside the app (the renderer has Node integration): hand safe URLs
+  // to the system browser and block everything else, including navigating
+  // the main window away from the app.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfSafe(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow.webContents.getURL()) return
+    if (isDev && process.env.DEV_SERVER_URL && url.startsWith(process.env.DEV_SERVER_URL)) return
+    event.preventDefault()
+    openExternalIfSafe(url)
   })
 
   createMenu()
