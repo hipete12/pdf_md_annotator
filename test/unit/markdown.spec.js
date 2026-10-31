@@ -111,6 +111,13 @@ describe('Markdown Rendering', () => {
       expect(result).to.include('language-python')
     })
 
+    it('should actually produce Prism token markup', () => {
+      for (const lang of ['javascript', 'python', 'php', 'bash']) {
+        const result = renderMarkdown('```' + lang + '\nif (x) { return 1 }\n```')
+        expect(result, lang).to.include('class="token')
+      }
+    })
+
     it('should highlight TypeScript code', () => {
       const input = '```typescript\nconst x: number = 1;\n```'
       const result = renderMarkdown(input)

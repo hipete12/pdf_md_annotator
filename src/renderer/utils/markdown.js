@@ -18,6 +18,8 @@ import 'prismjs/components/prism-csharp'
 import 'prismjs/components/prism-go'
 import 'prismjs/components/prism-rust'
 import 'prismjs/components/prism-ruby'
+// php hooks into every highlight call and needs markup-templating loaded first
+import 'prismjs/components/prism-markup-templating'
 import 'prismjs/components/prism-php'
 import 'prismjs/components/prism-sql'
 import 'prismjs/components/prism-bash'
