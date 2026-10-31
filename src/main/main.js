@@ -357,6 +357,13 @@ ipcMain.handle('save-pdf-as', async (event, { sourcePdfPath, data }) => {
     }
     fs.writeFileSync(tempPath, JSON.stringify({ ...data, pdfPath: targetPdfPath }, null, 2), 'utf8')
     fs.renameSync(tempPath, pdfmarkPath)
+
+    // Bring the chat sessions along
+    const sourceChatPath = getPdfchatPath(sourcePdfPath)
+    if (fs.existsSync(sourceChatPath) && targetPdfPath !== path.resolve(sourcePdfPath)) {
+      const chat = JSON.parse(fs.readFileSync(sourceChatPath, 'utf8'))
+      writeJsonAtomic(getPdfchatPath(targetPdfPath), { ...chat, pdfPath: targetPdfPath })
+    }
   } catch (err) {
     log.error('Save As failed:', err)
     dialog.showErrorBox('Save As Failed', err.message)
@@ -450,6 +457,38 @@ ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
 // ---------------------------------------------------------------------------
 // LLM chat
 // ---------------------------------------------------------------------------
+
+// Chat sessions live in "<name>.pdfchat" next to the PDF
+function getPdfchatPath(pdfPath) {
+  return pdfPath.replace(/\.pdf$/i, '.pdfchat')
+}
+
+function writeJsonAtomic(filePath, data) {
+  const tempPath = `${filePath}.tmp`
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8')
+  fs.renameSync(tempPath, filePath)
+}
+
+ipcMain.handle('chat:load', (event, { pdfPath }) => {
+  const chatPath = getPdfchatPath(pdfPath)
+  if (!fs.existsSync(chatPath)) return { success: true, data: null }
+  try {
+    return { success: true, data: JSON.parse(fs.readFileSync(chatPath, 'utf8')) }
+  } catch (err) {
+    log.error('Failed to load .pdfchat:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('chat:save', (event, { pdfPath, data }) => {
+  try {
+    writeJsonAtomic(getPdfchatPath(pdfPath), data)
+    return { success: true }
+  } catch (err) {
+    log.error('Failed to save .pdfchat:', err)
+    return { success: false, error: err.message }
+  }
+})
 
 // API keys: write-only from the renderer's point of view
 ipcMain.handle('llm:key-status', () => ({

@@ -2,6 +2,7 @@ import { createStore } from 'vuex'
 import { markRaw } from 'vue'
 import { v4 as uuidv4 } from 'uuid'
 import { createDefaultSettings, mergeSettings, pickSettings } from '../../common/constants'
+import { createChatModule, createChatPlugin } from './chat'
 
 // Safely get ipcRenderer - may not be available in browser context
 let defaultIpcRenderer = null
@@ -61,6 +62,12 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
   }, 2000)
 
   return createStore({
+    modules: {
+      chat: createChatModule({ ipcRenderer })
+    },
+    
+    plugins: [createChatPlugin({ ipcRenderer })],
+    
     state: () => ({
       // PDF state
       pdfPath: null,
@@ -424,7 +431,9 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
           obj = obj[keys[i]]
         }
         obj[keys[keys.length - 1]] = value
-        state.isDirty = true
+        // Only these settings are saved into the .pdfmark; app-level settings
+        // (theme, chat panel, LLM provider, ...) don't make the document dirty
+        if (keys[0] === 'markdown' || keys[0] === 'latex') state.isDirty = true
       },
     
       SET_LLM_MODELS(state, { providerId, models }) {

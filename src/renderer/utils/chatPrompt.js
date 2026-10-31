@@ -123,7 +123,8 @@ export function describePageRanges(pages) {
 /**
  * Keep only complete user/assistant exchanges from the history: failed or
  * empty assistant replies are dropped together with the user turn they
- * answered, so roles always alternate.
+ * answered, so roles always alternate. Replies the user stopped part-way are
+ * kept, since the user has seen (and may refer to) that text.
  */
 export function completedExchanges(messages) {
   const result = []
@@ -131,7 +132,9 @@ export function completedExchanges(messages) {
     const message = messages[i]
     if (message.role !== 'user') continue
     const reply = messages[i + 1]
-    if (reply && reply.role === 'assistant' && reply.content && !reply.error) {
+    const usable = reply && reply.role === 'assistant' && reply.content &&
+      (!reply.error || reply.error.code === 'aborted')
+    if (usable) {
       result.push(message, reply)
       i++
     }

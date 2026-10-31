@@ -106,7 +106,8 @@ describe('chatPrompt', () => {
       { role: 'assistant', content: 'partial', error: { code: 'aborted' } },
       { role: 'user', content: 'q4' }
     ]
-    expect(completedExchanges(history).map(m => m.content)).to.deep.equal(['q1', 'a1'])
+    // q3's stopped-but-partial answer is kept; q2 (failed) and q4 (no reply) are not
+    expect(completedExchanges(history).map(m => m.content)).to.deep.equal(['q1', 'a1', 'q3', 'partial'])
   })
 
   describe('buildRequestMessages', () => {
