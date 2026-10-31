@@ -50,12 +50,38 @@ npm install
 # Run in development mode
 npm run dev
 
-# Build for production
+# Build the application (webpack -> app-build/)
 npm run build
 
-# Create distributable
+# Create a Linux AppImage (-> dist/)
+npm run dist:linux
+
+# Create a Windows installer (run on Windows)
 npm run dist
 ```
+
+## Linux
+
+`npm run dist:linux` produces `dist/pdf-annotator-<version>-x86_64.AppImage`.
+
+To run the AppImage on Ubuntu 24.04+:
+
+```bash
+sudo apt install libfuse2t64
+chmod +x dist/pdf-annotator-*.AppImage
+./dist/pdf-annotator-*.AppImage
+```
+
+If FUSE is unavailable, run it with `APPIMAGE_EXTRACT_AND_RUN=1 ./dist/pdf-annotator-*.AppImage`.
+On distributions that restrict unprivileged user namespaces (for example Ubuntu 24.04 AppArmor),
+the app may need `--no-sandbox`:
+
+```bash
+./dist/pdf-annotator-*.AppImage --no-sandbox
+```
+
+The AppImage contains a desktop entry and PDF MIME association, but automatic registration
+requires [AppImageLauncher](https://github.com/TheAssassin/AppImageLauncher) or `appimaged`.
 
 ## .pdfmark File Format
 
@@ -111,11 +137,14 @@ src/
 │   └── styles/     # CSS styles
 └── common/         # Shared code
 
+app-build/          # Webpack output (generated)
+dist/               # electron-builder output (generated)
+
 test/
 ├── unit/           # Unit tests (Karma + Mocha)
 └── e2e/            # E2E tests (Playwright)
 
-static/             # Static assets
+static/             # Static assets and application icons
 scripts/            # Build scripts
 ```
 

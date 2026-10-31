@@ -32,7 +32,7 @@
 </template>
 
 <script>
-import { ref, computed, watch, onMounted, onUnmounted, shallowRef } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted, shallowRef } from 'vue'
 import { useStore } from 'vuex'
 import AnnotationBox from './AnnotationBox.vue'
 
@@ -88,10 +88,13 @@ export default {
     const setCanvasRef = (el, pageNum) => {
       if (el) {
         canvasRefs.set(pageNum, el)
-        if (renderWindowPages.value.has(pageNum) && !renderedPages.has(pageNum)) {
-          pendingPages.add(pageNum)
-          processQueue()
-        }
+      if (renderWindowPages.value.has(pageNum) && !renderedPages.has(pageNum)) {
+        pendingPages.add(pageNum)
+        // Wait for Vue to finish mounting the canvas before starting a render.
+        // Queueing synchronously here can race the first render pass and leave
+        // the canvas at its default 300x150 size until the user scrolls.
+        nextTick(processQueue)
+      }
       } else {
         canvasRefs.delete(pageNum)
       }
@@ -570,6 +573,9 @@ export default {
         bumpGeneration()
         rasterScale.value = displayScale.value
         scheduleRenderWindow()
+        // The first pass only creates the canvas elements; run a second pass
+        // once they exist so the initial page rasterizes without user input.
+        nextTick(() => scheduleRenderWindow())
       }
     })
 

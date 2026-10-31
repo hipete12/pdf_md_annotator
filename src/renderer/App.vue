@@ -72,19 +72,11 @@ try {
   console.warn('Running outside Electron context')
 }
 
+const path = require('path')
+
 // Configure PDF.js worker path
 if (typeof window !== 'undefined') {
-  const isDev = process.env.NODE_ENV === 'development'
-  if (isDev) {
-    // Development: use node_modules path
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url
-    ).toString()
-  } else {
-    // Production: worker is bundled in resources
-    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs'
-  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs'
 }
 
 // Configure PDF.js to handle rendering errors gracefully
@@ -155,6 +147,7 @@ export default {
     
     const loadPdf = async (filePath, annotations) => {
       if (!ipcRenderer) return
+      let loadingTask = null
       try {
         // If a previous load is still in flight, cancel/destroy it before starting a new one
         if (currentLoadingTask) {
@@ -180,7 +173,7 @@ export default {
         console.log('Uint8Array created, length:', uint8Array.length)
         
         // Load PDF with error handling options
-        const loadingTask = pdfjsLib.getDocument({
+        loadingTask = pdfjsLib.getDocument({
           data: uint8Array,
           verbosity: 0, // Suppress non-critical warnings
           standardFontDataUrl: null,
@@ -300,6 +293,12 @@ export default {
     })
     
     const handleGlobalKeydown = (e) => {
+      // Ctrl+, to open settings
+      if (e.ctrlKey && e.key === ',') {
+        e.preventDefault()
+        openSettings()
+      }
+
       // Ctrl+S to save
       if (e.ctrlKey && e.key === 's') {
         e.preventDefault()
@@ -366,6 +365,9 @@ export default {
     
     const handleConcatenatePdf = async (droppedPdfPath) => {
       if (!ipcRenderer) return
+
+      const currentPdfPath = store.state.pdfPath
+      if (!currentPdfPath) return
       
       try {
         // Show dialog asking where to concatenate
@@ -376,12 +378,10 @@ export default {
         if (result === 'cancel') return
         
         const position = result // 'beginning' or 'end'
-        const currentPdfPath = store.state.pdfPath
-        
-        // Get the directory of the current PDF
-        const currentDir = currentPdfPath.substring(0, currentPdfPath.lastIndexOf('\\'))
-        const droppedFileName = droppedPdfPath.split(/[\\/]/).pop()
-        const targetPath = `${currentDir}\\${droppedFileName}`
+        const targetPath = path.join(
+          path.dirname(currentPdfPath),
+          path.basename(droppedPdfPath)
+        )
         
         // Copy the dropped PDF to the same folder (with overwrite confirmation)
         const copyResult = await ipcRenderer.invoke('copy-pdf-file', {
@@ -417,8 +417,7 @@ export default {
           document: droppedPdf
         })
         
-        // Mark as dirty and save
-        store.commit('MARK_DIRTY')
+        // Save the updated annotation data
         store.dispatch('savePdfmark', { commit: true })
         
       } catch (err) {

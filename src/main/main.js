@@ -3,6 +3,7 @@ const path = require('path')
 const fs = require('fs')
 const Store = require('electron-store')
 const log = require('electron-log')
+const { fileURLToPath } = require('url')
 
 // Initialize store for settings
 const store = new Store({
@@ -50,6 +51,26 @@ let currentPdfPath = null
 
 const isDev = process.env.NODE_ENV === 'development'
 
+function resolvePdfPath(candidate, baseDir) {
+  if (!candidate || typeof candidate !== 'string') return null
+  if (candidate.startsWith('-')) return null
+  let candidatePath = candidate
+  if (candidatePath.startsWith('file://')) {
+    try { candidatePath = fileURLToPath(candidatePath) } catch { return null }
+  }
+  const resolved = path.resolve(baseDir || process.cwd(), candidatePath)
+  if (!/\.pdf$/i.test(resolved)) return null
+  return fs.existsSync(resolved) ? resolved : null
+}
+
+function findPdfArgument(argv, startIndex = 1, baseDir) {
+  for (let i = startIndex; i < argv.length; i++) {
+    const pdfPath = resolvePdfPath(argv[i], baseDir)
+    if (pdfPath) return pdfPath
+  }
+  return null
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -76,9 +97,8 @@ function createWindow() {
     mainWindow.show()
     
     // Check if opened with a file argument
-    const args = process.argv.slice(isDev ? 2 : 1)
-    const pdfFile = args.find(arg => arg.endsWith('.pdf'))
-    if (pdfFile && fs.existsSync(pdfFile)) {
+    const pdfFile = findPdfArgument(process.argv, isDev ? 2 : 1)
+    if (pdfFile) {
       openPdfFile(pdfFile)
     }
   })
@@ -188,7 +208,7 @@ function createMenu() {
               type: 'info',
               title: 'About PDF Annotator',
               message: 'PDF Annotator',
-              detail: 'A PDF viewer with Markdown and LaTeX annotation support.\nVersion 1.0.0'
+              detail: 'A PDF viewer with Markdown and LaTeX annotation support.\nVersion 1.1.0'
             })
           }
         },
@@ -218,6 +238,8 @@ async function openFileDialog() {
 }
 
 function openPdfFile(filePath) {
+  filePath = path.resolve(filePath)
+
   if (!fs.existsSync(filePath)) {
     dialog.showErrorBox('File Not Found', `The file "${filePath}" does not exist.`)
     return
@@ -403,15 +425,30 @@ ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
 })
 
 // App lifecycle
-app.whenReady().then(() => {
-  createWindow()
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (event, argv, workingDirectory) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
     }
+    const pdfFile = findPdfArgument(argv, 1, workingDirectory)
+    if (pdfFile) openPdfFile(pdfFile)
   })
-})
+
+  app.whenReady().then(() => {
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
