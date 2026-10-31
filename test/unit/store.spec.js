@@ -1,202 +1,25 @@
 /**
- * Unit tests for the Vuex store
+ * Unit tests for the Vuex store (src/renderer/store)
  */
 
-import { createStore } from 'vuex'
+import { createAppStore } from '../../src/renderer/store'
 
-// Mock electron ipcRenderer
-const mockIpcRenderer = {
-  invoke: () => Promise.resolve({}),
-  on: () => {},
-  removeListener: () => {}
+// Records every ipcRenderer.invoke call so save behaviour can be asserted
+const createMockIpc = () => {
+  const calls = []
+  return {
+    calls,
+    invoke: (channel, payload) => {
+      calls.push({ channel, payload })
+      return Promise.resolve({ success: true })
+    },
+    on: () => {},
+    removeListener: () => {}
+  }
 }
 
-// Mock the store module
-const createTestStore = () => {
-  return createStore({
-    state: {
-      pdfPath: null,
-      pdfDocument: null,
-      pageCount: 0,
-      currentPage: 1,
-      scale: 1.0,
-      pageOrder: [],
-      deletedPages: [],
-      sidebarVisible: true,
-      sidebarWidth: 200,
-      selectedPages: [],
-      annotations: {},
-      selectedAnnotation: null,
-      settings: {
-        markdown: {
-          fontSize: 14,
-          lineHeight: 1.6,
-          fontFamily: 'system-ui'
-        },
-        annotationBox: {
-          defaultWidth: 300,
-          defaultHeight: 200,
-          minWidth: 100,
-          minHeight: 50
-        },
-        latex: {
-          macros: {},
-          throwOnError: false
-        },
-        shortcuts: {
-          bold: 'Ctrl+B',
-          italic: 'Ctrl+I',
-          underline: 'Ctrl+U',
-          save: 'Ctrl+S',
-          hideAnnotation: 'Ctrl+H'
-        },
-        ui: {
-          sidebarWidth: 200,
-          sidebarVisible: true,
-          theme: 'light'
-        }
-      },
-      settingsModalOpen: false,
-      isDirty: false,
-      pdfmarkVersion: '1.0.0'
-    },
-    
-    getters: {
-      currentPageAnnotations: (state) => {
-        return state.annotations[state.currentPage] || []
-      },
-      visiblePages: (state) => {
-        return state.pageOrder.filter(idx => !state.deletedPages.includes(idx))
-      },
-      hasUnsavedChanges: (state) => state.isDirty,
-      annotationById: (state) => (id) => {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const found = pageAnnotations.find(a => a.id === id)
-          if (found) return found
-        }
-        return null
-      },
-      latexMacros: (state) => state.settings.latex.macros
-    },
-    
-    mutations: {
-      SET_PDF_DOCUMENT(state, { document, path }) {
-        state.pdfDocument = document
-        state.pdfPath = path
-        state.pageCount = document.numPages
-        state.pageOrder = Array.from({ length: document.numPages }, (_, i) => i + 1)
-        state.deletedPages = []
-        state.annotations = {}
-        state.currentPage = 1
-        state.isDirty = false
-      },
-      SET_CURRENT_PAGE(state, page) {
-        state.currentPage = page
-      },
-      SET_SCALE(state, scale) {
-        state.scale = Math.max(0.25, Math.min(4, scale))
-      },
-      SET_SIDEBAR_VISIBLE(state, visible) {
-        state.sidebarVisible = visible
-      },
-      SET_SELECTED_PAGES(state, pages) {
-        state.selectedPages = pages
-      },
-      REORDER_PAGES(state, { fromIndex, toIndex }) {
-        const [removed] = state.pageOrder.splice(fromIndex, 1)
-        state.pageOrder.splice(toIndex, 0, removed)
-        state.isDirty = true
-      },
-      DELETE_PAGES(state, pageIndices) {
-        pageIndices.forEach(idx => {
-          if (!state.deletedPages.includes(idx)) {
-            state.deletedPages.push(idx)
-          }
-        })
-        state.selectedPages = []
-        state.isDirty = true
-      },
-      ADD_ANNOTATION(state, { pageIndex, annotation }) {
-        if (!state.annotations[pageIndex]) {
-          state.annotations[pageIndex] = []
-        }
-        state.annotations[pageIndex].push({
-          id: 'test-id-' + Math.random(),
-          type: 'markdown',
-          x: annotation.x,
-          y: annotation.y,
-          width: state.settings.annotationBox.defaultWidth,
-          height: state.settings.annotationBox.defaultHeight,
-          content: '',
-          style: { ...state.settings.markdown },
-          isCollapsed: false,
-          collapsedTitle: '',
-          ...annotation
-        })
-        state.isDirty = true
-      },
-      UPDATE_ANNOTATION(state, { id, updates }) {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const annotation = pageAnnotations.find(a => a.id === id)
-          if (annotation) {
-            Object.assign(annotation, updates)
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      DELETE_ANNOTATION(state, id) {
-        for (const [pageIndex, pageAnnotations] of Object.entries(state.annotations)) {
-          const index = pageAnnotations.findIndex(a => a.id === id)
-          if (index !== -1) {
-            pageAnnotations.splice(index, 1)
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      SET_SELECTED_ANNOTATION(state, id) {
-        state.selectedAnnotation = id
-      },
-      SET_ANNOTATION_COLLAPSED_TITLE(state, { id, title }) {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const annotation = pageAnnotations.find(a => a.id === id)
-          if (annotation) {
-            annotation.collapsedTitle = title
-            annotation.isCollapsed = true
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      LOAD_ANNOTATIONS(state, data) {
-        if (data) {
-          state.annotations = data.annotations || {}
-          state.pageOrder = data.pageOrder || state.pageOrder
-          state.deletedPages = data.deletedPages || []
-        }
-        state.isDirty = false
-      },
-      SET_SETTINGS(state, settings) {
-        state.settings = { ...state.settings, ...settings }
-      },
-      SET_SETTING(state, { path, value }) {
-        const keys = path.split('.')
-        let obj = state.settings
-        for (let i = 0; i < keys.length - 1; i++) {
-          obj = obj[keys[i]]
-        }
-        obj[keys[keys.length - 1]] = value
-      },
-      SET_SETTINGS_MODAL(state, open) {
-        state.settingsModalOpen = open
-      },
-      MARK_CLEAN(state) {
-        state.isDirty = false
-      }
-    }
-  })
-}
+const createTestStore = (ipcRenderer = createMockIpc()) => createAppStore({ ipcRenderer })
+
 
 describe('Vuex Store', () => {
   let store
