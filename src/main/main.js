@@ -400,21 +400,6 @@ ipcMain.handle('copy-pdf-file', async (event, { sourcePath, targetPath }) => {
   }
 })
 
-// Get PDF page count
-ipcMain.handle('get-pdf-page-count', async (event, filePath) => {
-  try {
-    const buffer = fs.readFileSync(filePath)
-    // Count pages by counting /Type /Page entries (simple heuristic)
-    // The renderer will get exact count from PDF.js
-    const content = buffer.toString('binary')
-    const matches = content.match(/\/Type\s*\/Page[^s]/g)
-    return matches ? matches.length : 1
-  } catch (err) {
-    log.error('Failed to get PDF page count:', err)
-    return 0
-  }
-})
-
 // Open PDF directly at a specific path (for drag-drop when no PDF is open)
 ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
   if (filePath && fs.existsSync(filePath)) {

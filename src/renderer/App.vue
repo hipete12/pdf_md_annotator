@@ -512,11 +512,12 @@ export default {
           return
         }
         
-        // Get page count of the dropped PDF
-        const pageCount = await ipcRenderer.invoke('get-pdf-page-count', targetPath)
-        
         // Load the dropped PDF
         const buffer = await ipcRenderer.invoke('read-pdf-file', targetPath)
+        if (!buffer) {
+          console.error('Failed to read dropped PDF:', targetPath)
+          return
+        }
         const uint8Array = new Uint8Array(buffer)
         const loadingTask = pdfjsLib.getDocument({
           data: uint8Array,
@@ -527,11 +528,12 @@ export default {
         })
         const droppedPdf = await loadingTask.promise
         
-        // Add to store
+        // Add to store (page count comes from PDF.js, which parses the file
+        // properly, including page objects inside compressed object streams)
         store.commit('ADD_CONCATENATED_PDF', {
           position,
           pdfPath: targetPath,
-          pageCount,
+          pageCount: droppedPdf.numPages,
           document: droppedPdf
         })
         
