@@ -22,7 +22,7 @@
     </div>
 
     <div
-      v-if="message.role === 'user'"
+      v-if="message.role === 'user' && message.content"
       class="chat-bubble"
     >
       {{ message.content }}

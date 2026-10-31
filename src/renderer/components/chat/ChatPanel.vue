@@ -154,6 +154,62 @@
     </div>
 
     <footer class="chat-composer">
+      <!-- Context for the next message: pending selection (dashed) and attached chips -->
+      <div
+        v-if="pendingContext || attachedContexts.length"
+        class="chat-context-tray"
+      >
+        <div
+          v-for="context in attachedContexts"
+          :key="context.id"
+          class="chat-chip attached"
+          :title="context.text"
+        >
+          <span class="chat-chip-kind">{{ context.kind === 'note' ? 'Note' : 'Text' }}</span>
+          <span class="chat-chip-page">p. {{ context.page }}</span>
+          <span class="chat-chip-text">{{ context.text }}</span>
+          <button
+            class="chat-chip-btn"
+            title="Remove"
+            @click="removeContext(context.id)"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M5 5l6 6M11 5l-6 6" /></svg>
+          </button>
+        </div>
+        <div
+          v-if="pendingContext"
+          :key="pendingContext.id"
+          class="chat-chip pending"
+          :title="`Attach to your next message:\n${pendingContext.text}`"
+          role="button"
+          tabindex="0"
+          @click="attachContext"
+          @keydown.enter.prevent="attachContext"
+        >
+          <span
+            class="chat-chip-add"
+            aria-hidden="true"
+          >
+            <svg viewBox="0 0 16 16"><path d="M8 4v8M4 8h8" /></svg>
+          </span>
+          <span class="chat-chip-kind">{{ pendingContext.kind === 'note' ? 'Note' : 'Selection' }}</span>
+          <span class="chat-chip-page">p. {{ pendingContext.page }}</span>
+          <span class="chat-chip-text">{{ pendingContext.text }}</span>
+          <button
+            class="chat-chip-btn"
+            title="Dismiss"
+            @click.stop="dismissPending"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M5 5l6 6M11 5l-6 6" /></svg>
+          </button>
+        </div>
+      </div>
       <div
         class="chat-input-wrap"
         :class="{ disabled: !hasModel }"
@@ -261,6 +317,75 @@ export default {
     const modelId = computed(() => llm.value.models?.[llm.value.provider] || '')
     const hasModel = computed(() => Boolean(modelId.value))
     const documentTitle = computed(() => String(store.state.pdfPath || 'this document').split(/[\\/]/).pop())
+
+    // --- Context chips -----------------------------------------------------
+    const pendingContext = computed(() => chat.value.pendingContext)
+    const attachedContexts = computed(() => chat.value.attachedContexts)
+    const MAX_CONTEXT_CHARS = 6000
+
+    const displayPage = (pageId) => store.getters.visiblePages.indexOf(pageId) + 1
+
+    const elementOf = (node) => (node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement)
+
+    // Text selected in the PDF's text layer becomes the pending chip. It is
+    // only replaced by the next selection, not cleared when the selection
+    // collapses (clicking into the chat panel always collapses it).
+    const captureSelection = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
+      const container = document.querySelector('.pdf-pages-container')
+      // Ctrl+A selects the whole document, which is already in the prompt
+      if (!container || container.classList.contains('pdf-select-all-mode')) return
+      const start = elementOf(selection.getRangeAt(0).startContainer)
+      if (!start?.closest('.textLayer')) return
+      const pageId = Number(start.closest('.pdf-page-wrapper')?.dataset.page)
+      if (!pageId) return
+
+      let text = selection.toString().replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim()
+      if (!text) return
+      if (text.length > MAX_CONTEXT_CHARS) text = `${text.slice(0, MAX_CONTEXT_CHARS)}…`
+      const pending = pendingContext.value
+      if (pending?.kind === 'text' && pending.text === text && pending.pageId === pageId) return
+      store.dispatch('chat/setPendingContext', { kind: 'text', page: displayPage(pageId), pageId, text })
+    }
+
+    let selectionTimer = null
+    const onSelectionChange = () => {
+      clearTimeout(selectionTimer)
+      selectionTimer = setTimeout(captureSelection, 250)
+    }
+    document.addEventListener('selectionchange', onSelectionChange)
+
+    // Selecting a note (with content) offers it as context too
+    const findNotePage = (id) => {
+      for (const [pageId, notes] of Object.entries(store.state.annotations)) {
+        if (notes.some(n => n.id === id)) return Number(pageId)
+      }
+      return null
+    }
+
+    watch(
+      () => {
+        const id = store.state.selectedAnnotation
+        const note = id ? store.getters.annotationById(id) : null
+        return note ? `${id}\u0000${note.content}` : null
+      },
+      (key) => {
+        if (!key) return
+        const [noteId, content] = key.split('\u0000')
+        const text = content.trim()
+        if (!text || attachedContexts.value.some(c => c.noteId === noteId)) return
+        const pageId = findNotePage(noteId)
+        store.dispatch('chat/setPendingContext', { kind: 'note', noteId, page: displayPage(pageId), pageId, text })
+      }
+    )
+
+    const attachContext = () => {
+      store.dispatch('chat/attachPendingContext')
+      input.value?.focus()
+    }
+    const dismissPending = () => store.dispatch('chat/setPendingContext', null)
+    const removeContext = (id) => store.dispatch('chat/removeAttachedContext', id)
 
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
       (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
@@ -392,6 +517,8 @@ export default {
     window.addEventListener('resize', onWindowResize)
 
     onUnmounted(() => {
+      document.removeEventListener('selectionchange', onSelectionChange)
+      clearTimeout(selectionTimer)
       window.removeEventListener('resize', onWindowResize)
       if (resizing.value) stopResize()
     })
@@ -410,6 +537,11 @@ export default {
     scrollToBottom()
 
     return {
+      pendingContext,
+      attachedContexts,
+      attachContext,
+      dismissPending,
+      removeContext,
       scroller,
       input,
       draft,
@@ -661,6 +793,121 @@ export default {
   font-size: 16px;
   line-height: 1;
   cursor: pointer;
+}
+
+/* Context chips */
+.chat-context-tray {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 6px;
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+.chat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-color);
+  animation: chat-chip-in 0.16s ease-out;
+}
+
+.chat-chip.attached {
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--primary-color);
+  background: var(--annotation-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.chat-chip.pending {
+  border: 1px dashed var(--text-muted);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding-left: 4px;
+}
+
+.chat-chip.pending:hover,
+.chat-chip.pending:focus-visible {
+  border-color: var(--primary-color);
+  color: var(--text-color);
+  outline: none;
+}
+
+.chat-chip-add {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--primary-color);
+  color: #fff;
+}
+
+.chat-chip-add svg {
+  width: 12px !important;
+  height: 12px !important;
+  stroke-width: 2 !important;
+}
+
+.chat-chip-kind {
+  flex: none;
+  font-weight: 600;
+  font-size: 11px;
+}
+
+.chat-chip.attached .chat-chip-kind {
+  color: var(--primary-color);
+}
+
+.chat-chip-page {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chat-chip-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-chip-btn {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-chip-btn:hover {
+  background: var(--border-color);
+  color: var(--text-color);
+}
+
+.chat-chip-btn svg {
+  width: 12px !important;
+  height: 12px !important;
+}
+
+@keyframes chat-chip-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* Composer */

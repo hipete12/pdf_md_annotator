@@ -228,6 +228,32 @@ describe('Chat store', () => {
   })
 })
 
+describe('Context chips', () => {
+  it('attaches pending contexts once, ignoring duplicates', async () => {
+    const { store } = await setup()
+    const attach = (ctx) => { store.dispatch('chat/setPendingContext', ctx); store.dispatch('chat/attachPendingContext') }
+    attach({ kind: 'text', page: 1, pageId: 1, text: 'same' })
+    attach({ kind: 'text', page: 1, pageId: 1, text: 'same' })
+    attach({ kind: 'text', page: 2, pageId: 2, text: 'same' })
+    attach({ kind: 'note', page: 1, pageId: 1, noteId: 'n1', text: 'v1' })
+    attach({ kind: 'note', page: 1, pageId: 1, noteId: 'n1', text: 'v2' })
+    expect(chat(store).attachedContexts.map(c => `${c.kind}:${c.pageId}:${c.text}`)).to.deep.equal(['text:1:same', 'text:2:same', 'note:1:v1'])
+    expect(chat(store).pendingContext).to.equal(null)
+    store.dispatch('chat/removeAttachedContext', chat(store).attachedContexts[0].id)
+    expect(chat(store).attachedContexts).to.have.length(2)
+  })
+
+  it('sends contexts without any typed text', async () => {
+    const { store, ipc } = await setup()
+    store.dispatch('chat/setPendingContext', { kind: 'text', page: 1, pageId: 1, text: 'Page one text' })
+    store.dispatch('chat/attachPendingContext')
+    expect(await store.dispatch('chat/sendMessage', { text: '' })).to.equal(true)
+    const last = ipc.lastCall('llm:chat-start').payload.messages.at(-1).content
+    expect(last).to.equal('<selected_context>\n[p. 1, selected text]\nPage one text\n</selected_context>')
+    expect(store.getters['chat/activeSession'].title).to.equal('Selected context')
+  })
+})
+
 describe('Page navigation state', () => {
   it('scroll requests always change (nonce) and reset with a new document', () => {
     const store = createAppStore({ ipcRenderer: createFakeIpc() })
