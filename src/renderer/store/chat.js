@@ -8,6 +8,8 @@
 import { v4 as uuidv4 } from 'uuid'
 import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom } from '../utils/chatPrompt'
 import { extractDocumentPages } from '../utils/documentText'
+import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
+import { resolveVisionSupport } from '../../common/llm'
 
 export const PDFCHAT_VERSION = '1.0.0'
 
@@ -32,13 +34,15 @@ export function sanitizeSessions(data) {
       title: typeof s.title === 'string' ? s.title : 'Chat',
       created: s.created || now(),
       modified: s.modified || s.created || now(),
+      // null: follow the "Send page images" setting; true/false: per-session override
+      visionEnabled: typeof s.visionEnabled === 'boolean' ? s.visionEnabled : null,
       messages: s.messages
         .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
         .map(m => ({ ...m, contexts: Array.isArray(m.contexts) ? m.contexts : [], pending: false }))
     }))
 }
 
-export function createChatModule({ ipcRenderer }) {
+export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderPageImage }) {
   return {
     namespaced: true,
 
@@ -61,6 +65,20 @@ export function createChatModule({ ipcRenderer }) {
 
     getters: {
       activeSession: (state) => findSession(state, state.activeSessionId),
+      // true / false / null (unknown) for the selected model
+      modelVision: (state, getters, rootState) => {
+        const llm = rootState.settings.llm
+        const modelId = llm.models?.[llm.provider] || ''
+        if (!modelId) return null
+        const model = (rootState.llmModels[llm.provider] || []).find(m => m.id === modelId)
+        return resolveVisionSupport(model, llm.visionOverrides, modelId)
+      },
+      // Whether the next message in the active session will include page images
+      imagesEnabled: (state, getters, rootState) => {
+        if (getters.modelVision === false) return false
+        const override = getters.activeSession?.visionEnabled
+        return typeof override === 'boolean' ? override : Boolean(rootState.settings.chat.visionEnabled)
+      },
       sortedSessions: (state) => [...state.sessions].sort((a, b) => b.modified.localeCompare(a.modified)),
       isStreaming: (state) => Boolean(state.streaming)
     },
@@ -88,6 +106,10 @@ export function createChatModule({ ipcRenderer }) {
       },
       SET_ACTIVE(state, id) {
         state.activeSessionId = id
+      },
+      SET_SESSION_VISION(state, { id, value }) {
+        const session = findSession(state, id)
+        if (session) session.visionEnabled = value
       },
       RENAME_SESSION(state, { id, title }) {
         const session = findSession(state, id)
@@ -184,7 +206,7 @@ export function createChatModule({ ipcRenderer }) {
       newSession({ commit, getters }) {
         // Reuse an untouched session instead of piling up empty ones
         if (getters.activeSession && getters.activeSession.messages.length === 0) return getters.activeSession.id
-        const session = { id: uuidv4(), title: 'New chat', created: now(), modified: now(), messages: [] }
+        const session = { id: uuidv4(), title: 'New chat', created: now(), modified: now(), visionEnabled: null, messages: [] }
         commit('ADD_SESSION', session)
         return session.id
       },
@@ -235,7 +257,7 @@ export function createChatModule({ ipcRenderer }) {
       },
 
       // Request an assistant reply to the given user message (also used by retry)
-      async generateReply({ commit, dispatch, state, rootState, rootGetters }, { sessionId, userMessageId }) {
+      async generateReply({ commit, dispatch, state, getters, rootState, rootGetters }, { sessionId, userMessageId }) {
         const session = findSession(state, sessionId)
         const index = session?.messages.findIndex(m => m.id === userMessageId) ?? -1
         if (index === -1) return false
@@ -278,6 +300,35 @@ export function createChatModule({ ipcRenderer }) {
             ...(currentIndex >= 0 ? [currentIndex + 1] : [])
           ]
           const doc = formatDocument(pages, { budgetTokens: llm.contextBudgetTokens, focusPages })
+
+          // Page images for vision models (never stored; the message records
+          // which pages were sent)
+          const images = []
+          if (getters.imagesEnabled) {
+            commit('SET_STATUS', 'Rendering page images…')
+            const pageIds = selectVisionPages({
+              mode: rootState.settings.chat.visionPages,
+              contexts: userMessage.contexts,
+              visiblePages: rootGetters.visiblePages,
+              viewPage: rootState.viewPage ?? rootState.currentPage,
+              max: rootState.settings.chat.maxVisionPages
+            })
+            for (const pageId of pageIds) {
+              const source = rootGetters.getPageSource(pageId)
+              if (!source?.document) continue
+              images.push({
+                pageId,
+                page: rootGetters.visiblePages.indexOf(pageId) + 1,
+                dataUrl: await renderPageImage(source.document, source.actualPage)
+              })
+            }
+          }
+          commit('UPDATE_MESSAGE', {
+            sessionId,
+            messageId: userMessage.id,
+            patch: { images: images.map(({ page, pageId }) => ({ page, pageId })) }
+          })
+
           messages = buildRequestMessages({
             systemTemplate: llm.systemTemplate,
             userTemplate: llm.userTemplate,
@@ -285,10 +336,14 @@ export function createChatModule({ ipcRenderer }) {
             documentText: doc.text,
             history,
             userMessage: { input: userMessage.content, contexts: userMessage.contexts },
-            images: []
+            images
           })
           commit('SET_LAST_REQUEST', {
-            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)), 0),
+            // Text only; image token cost depends on the provider
+            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(
+              typeof m.content === 'string' ? m.content : m.content.filter(p => p.type === 'text').map(p => p.text).join('\n')
+            ), 0),
+            images: images.length,
             truncated: doc.truncated,
             includedPages: doc.includedPages,
             totalPages: doc.totalPages
@@ -343,10 +398,19 @@ export function createChatModule({ ipcRenderer }) {
         })
       },
 
+      // Turn page images on/off for the active session
+      setSessionVision({ commit, getters, dispatch }, value) {
+        const session = getters.activeSession
+        if (!session) return
+        commit('SET_SESSION_VISION', { id: session.id, value })
+        if (session.messages.length) return dispatch('persist')
+      },
+
       // Regenerate the last assistant reply of the active session
-      retry({ commit, dispatch, state, getters }) {
+      retry({ commit, dispatch, state, getters }, { withoutImages = false } = {}) {
         const session = getters.activeSession
         if (!session || state.streaming) return false
+        if (withoutImages) commit('SET_SESSION_VISION', { id: session.id, value: false })
         const last = session.messages[session.messages.length - 1]
         const previous = session.messages[session.messages.length - 2]
         if (last?.role !== 'assistant' || previous?.role !== 'user') return false

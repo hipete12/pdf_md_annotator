@@ -53,7 +53,7 @@ function snapshotPdfmark(state, commit) {
  * Create a new store instance. Tests pass a fake ipcRenderer; the app uses the
  * default store exported below.
  */
-export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
+export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageImage } = {}) {
   // Auto-save (debounced per store instance)
   const debouncedAutoSave = debounce(async function({ state, dispatch }) {
     if (state.pdfPath && state.isDirty) {
@@ -63,7 +63,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
 
   return createStore({
     modules: {
-      chat: createChatModule({ ipcRenderer })
+      chat: createChatModule({ ipcRenderer, ...(renderPageImage ? { renderPageImage } : {}) })
     },
     
     plugins: [createChatPlugin({ ipcRenderer })],

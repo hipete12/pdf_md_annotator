@@ -21,12 +21,31 @@
       </button>
     </div>
 
-    <div
-      v-if="message.role === 'user' && message.content"
-      class="chat-bubble"
-    >
-      {{ message.content }}
-    </div>
+    <template v-if="message.role === 'user'">
+      <div
+        v-if="message.content"
+        class="chat-bubble"
+      >
+        {{ message.content }}
+      </div>
+      <div
+        v-if="message.images && message.images.length"
+        class="chat-images-note"
+        title="These pages were sent to the model as images"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        ><rect
+          x="2.5"
+          y="3.5"
+          width="11"
+          height="9"
+          rx="1"
+        /><path d="M2.5 10.5l3-3 3 3 2-2 3 3" /></svg>
+        {{ message.images.length === 1 ? 'Page' : 'Pages' }} {{ message.images.map(i => i.page).join(', ') }} sent as {{ message.images.length === 1 ? 'an image' : 'images' }}
+      </div>
+    </template>
 
     <template v-else>
       <details
@@ -58,6 +77,13 @@
         class="chat-error"
       >
         {{ message.error.message }}
+        <button
+          v-if="message.error.code === 'image_unsupported' && isLast"
+          class="chat-error-action"
+          @click="$emit('retry', { withoutImages: true })"
+        >
+          Retry without images
+        </button>
       </div>
       <div
         v-else-if="message.error"
@@ -347,6 +373,35 @@ export default {
   color: var(--danger-color);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.chat-error-action {
+  display: block;
+  margin-top: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--danger-color);
+  border-radius: 4px;
+  background: var(--annotation-bg);
+  color: var(--danger-color);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-images-note {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.chat-images-note svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
 }
 
 .chat-stopped {

@@ -225,6 +225,25 @@
           @keydown.enter.exact.prevent="send()"
         />
         <button
+          v-if="hasModel && modelVision !== false"
+          class="chat-vision-toggle"
+          :class="{ on: imagesEnabled, unknown: modelVision === null }"
+          :title="visionTitle"
+          :aria-pressed="imagesEnabled"
+          @click="toggleImages"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><rect
+            x="2.5"
+            y="3.5"
+            width="11"
+            height="9"
+            rx="1"
+          /><path d="M2.5 10.5l3-3 3 3 2-2 3 3" /></svg>
+        </button>
+        <button
           v-if="isStreaming"
           class="chat-send stop"
           title="Stop generating"
@@ -387,6 +406,20 @@ export default {
     const dismissPending = () => store.dispatch('chat/setPendingContext', null)
     const removeContext = (id) => store.dispatch('chat/removeAttachedContext', id)
 
+    // --- Page images (vision) -----------------------------------------------
+    const modelVision = computed(() => store.getters['chat/modelVision'])
+    const imagesEnabled = computed(() => store.getters['chat/imagesEnabled'])
+    const visionTitle = computed(() => {
+      const chatSettings = store.state.settings.chat
+      const which = chatSettings.visionPages === 'all'
+        ? `all pages (up to ${chatSettings.maxVisionPages})`
+        : `pages of attached context, or the page in view (up to ${chatSettings.maxVisionPages})`
+      const state = imagesEnabled.value ? `On: sends ${which} as images.` : 'Off: text only.'
+      const unknown = modelVision.value === null ? ' This model does not report image support.' : ''
+      return `Page images for this session. ${state}${unknown} Click to turn ${imagesEnabled.value ? 'off' : 'on'}.`
+    })
+    const toggleImages = () => store.dispatch('chat/setSessionVision', !imagesEnabled.value)
+
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
       (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
 
@@ -418,9 +451,9 @@ export default {
     }
 
     const stop = () => store.dispatch('chat/stop')
-    const retry = () => {
+    const retry = (options) => {
       stickToBottom.value = true
-      store.dispatch('chat/retry')
+      store.dispatch('chat/retry', options)
     }
     const dismissNotice = () => store.commit('chat/SET_NOTICE', '')
 
@@ -537,6 +570,10 @@ export default {
     scrollToBottom()
 
     return {
+      modelVision,
+      imagesEnabled,
+      visionTitle,
+      toggleImages,
       pendingContext,
       attachedContexts,
       attachContext,
@@ -949,6 +986,36 @@ export default {
   font: inherit;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.chat-vision-toggle {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-vision-toggle:hover {
+  background: var(--sidebar-bg);
+}
+
+.chat-vision-toggle.on {
+  color: var(--primary-color);
+  border-color: var(--primary-color);
+  background: var(--selection-color);
+}
+
+.chat-vision-toggle.on.unknown {
+  color: var(--warning-color);
+  border-color: var(--warning-color);
+  background: rgba(245, 158, 11, 0.1);
 }
 
 .chat-send {
