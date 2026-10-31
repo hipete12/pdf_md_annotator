@@ -18,7 +18,7 @@
         class="chat-session-toggle"
         :class="{ open: showSessions }"
         title="Sessions"
-        @click="showSessions = !showSessions"
+        @click="showSessions = !showSessions; showBranches = false"
       >
         <svg
           viewBox="0 0 16 16"
@@ -33,6 +33,30 @@
       </button>
 
       <div class="chat-header-actions">
+        <button
+          class="chat-icon-btn"
+          :class="{ active: showBranches }"
+          title="Branches"
+          :disabled="messages.length === 0"
+          @click="showBranches = !showBranches; showSessions = false"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><circle
+            cx="5"
+            cy="3.5"
+            r="1.5"
+          /><circle
+            cx="5"
+            cy="12.5"
+            r="1.5"
+          /><circle
+            cx="11"
+            cy="7"
+            r="1.5"
+          /><path d="M5 5v6M5 9c0-2 6-1 6-3.5" /></svg>
+        </button>
         <button
           class="chat-icon-btn"
           title="New session"
@@ -71,6 +95,13 @@
         </button>
       </div>
     </header>
+
+    <ChatBranchMap
+      v-if="showBranches"
+      :session="activeSession"
+      :locked="isStreaming"
+      @navigate="openBranch"
+    />
 
     <ChatSessionList
       v-if="showSessions"
@@ -309,6 +340,7 @@ import { useStore } from 'vuex'
 import ChatMessage from './ChatMessage.vue'
 import ChatSessionList from './ChatSessionList.vue'
 import ChatModelPicker from './ChatModelPicker.vue'
+import ChatBranchMap from './ChatBranchMap.vue'
 import { describePageRanges } from '../../utils/chatPrompt'
 
 const MIN_WIDTH = 300
@@ -317,7 +349,7 @@ const DEFAULT_WIDTH = 420
 export default {
   name: 'ChatPanel',
 
-  components: { ChatMessage, ChatSessionList, ChatModelPicker },
+  components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap },
 
   emits: ['close', 'open-settings'],
 
@@ -506,8 +538,23 @@ export default {
       store.dispatch('chat/deleteBranch', messageId)
     }
 
+    // Branch map: open a branch and scroll to the chosen message
+    const showBranches = ref(false)
+    const openBranch = async (messageId) => {
+      cancelEdit()
+      const switched = await store.dispatch('chat/switchBranch', messageId)
+      if (!switched) return
+      showBranches.value = false
+      stickToBottom.value = false
+      await nextTick()
+      scroller.value?.querySelector(`[data-message-id="${messageId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }
+
     // An edit never survives a session switch or its message leaving the view
-    watch(activeSessionId, cancelEdit)
+    watch(activeSessionId, () => {
+      cancelEdit()
+      showBranches.value = false
+    })
     watch(messages, (list) => {
       if (editingId.value && !list.some(m => m.id === editingId.value)) cancelEdit()
     })
@@ -640,6 +687,8 @@ export default {
     scrollToBottom()
 
     return {
+      showBranches,
+      openBranch,
       onComposerKeydown,
       editingId,
       startEdit,
@@ -802,7 +851,17 @@ export default {
   cursor: pointer;
 }
 
-.chat-icon-btn:hover {
+.chat-icon-btn.active {
+  background: var(--selection-color);
+  color: var(--primary-color);
+}
+
+.chat-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.chat-icon-btn:hover:not(:disabled) {
   background: var(--border-color);
   color: var(--text-color);
 }
