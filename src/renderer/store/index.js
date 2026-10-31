@@ -503,7 +503,8 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer } = {}) {
       async saveSettings({ state }) {
         if (!ipcRenderer) return
         try {
-          await ipcRenderer.invoke('set-settings', state.settings)
+          // state.settings is a reactive Proxy, which IPC cannot clone
+          await ipcRenderer.invoke('set-settings', clone(state.settings))
         } catch (err) {
           console.error('Failed to save settings:', err)
         }

@@ -520,3 +520,15 @@ describe('LLM models', () => {
   })
 })
 
+describe('saveSettings', () => {
+  it('sends a plain, cloneable object over IPC', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_SETTING', { path: 'ui.theme', value: 'dark' })
+    await store.dispatch('saveSettings')
+    const call = ipc.calls.find(c => c.channel === 'set-settings')
+    // Electron IPC uses structured clone, which throws on Vue's reactive Proxies
+    expect(() => structuredClone(call.payload)).to.not.throw()
+    expect(call.payload.ui.theme).to.equal('dark')
+  })
+})
