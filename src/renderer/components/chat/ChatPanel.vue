@@ -323,10 +323,11 @@ export default {
     }
 
     // --- Scrolling ---------------------------------------------------------
-    const scrollToBottom = () => nextTick(() => {
+    const scrollToBottom = async () => {
+      await nextTick()
       const el = scroller.value
       if (el) el.scrollTop = el.scrollHeight
-    })
+    }
 
     const onScroll = () => {
       const el = scroller.value
