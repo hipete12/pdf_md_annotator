@@ -64,9 +64,21 @@ describe('Chat store', () => {
     expect(store.getters['chat/sortedSessions'].map(s => s.id)).to.deep.equal(['s2', 's1'])
   })
 
+  it('converts 1.0.0 (flat) chat files into a branch chain', async () => {
+    const { store } = await setup({
+      savedChat: {
+        version: '1.0.0',
+        sessions: [{ id: 's1', title: 'Old', created: '2026-01-01T00:00:00Z', modified: '2026-01-01T00:00:00Z',
+          messages: [{ id: 'q', role: 'user', content: 'q' }, { id: 'a', role: 'assistant', content: 'a' }] }]
+      }
+    })
+    expect(store.getters['chat/activeMessages'].map(m => m.id)).to.deep.equal(['q', 'a'])
+    expect(chat(store).sessions[0].messages[1].parentId).to.equal('q')
+  })
+
   it('sanitizes malformed chat files', () => {
     expect(sanitizeSessions(null)).to.deep.equal([])
-    const sessions = sanitizeSessions({ sessions: [{ id: 'a', messages: [{ role: 'system', content: 'x' }, { role: 'user', content: 'ok' }, null] }, { nope: 1 }] })
+    const sessions = sanitizeSessions({ sessions: [{ id: 'a', messages: [{ id: 's', role: 'system', content: 'x' }, { id: 'u', role: 'user', content: 'ok' }, { role: 'user', content: 'no id' }, null] }, { nope: 1 }] })
     expect(sessions).to.have.length(1)
     expect(sessions[0].messages.map(m => m.content)).to.deep.equal(['ok'])
     expect(sessions[0].messages[0].contexts).to.deep.equal([])
@@ -105,7 +117,8 @@ describe('Chat store', () => {
 
     const saved = ipc.lastCall('chat:save').payload
     expect(saved.pdfPath).to.equal('/docs/paper.pdf')
-    expect(saved.data.version).to.equal('1.0.0')
+    expect(saved.data.version).to.equal('1.1.0')
+    expect(saved.data.sessions[0].messages[1].parentId).to.equal(saved.data.sessions[0].messages[0].id)
     expect(saved.data.sessions[0].messages[1].content).to.equal('It is about text.')
     expect(saved.data.sessions[0].messages[1]).to.not.have.property('pending')
   })

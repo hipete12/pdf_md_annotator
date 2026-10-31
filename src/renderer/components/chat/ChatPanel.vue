@@ -323,7 +323,8 @@ export default {
     const activeSession = computed(() => store.getters['chat/activeSession'])
     const activeSessionId = computed(() => chat.value.activeSessionId)
     const sortedSessions = computed(() => store.getters['chat/sortedSessions'])
-    const messages = computed(() => activeSession.value?.messages || [])
+    // Visible branch of the session's conversation tree
+    const messages = computed(() => store.getters['chat/activeMessages'])
     const isStreaming = computed(() => store.getters['chat/isStreaming'])
     const fullscreen = computed(() => chat.value.fullscreen)
     const status = computed(() => chat.value.status)

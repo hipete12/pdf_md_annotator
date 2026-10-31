@@ -10,14 +10,25 @@ import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom 
 import { extractDocumentPages } from '../utils/documentText'
 import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
 import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
+import { activePath, ancestorsOf, normalizeTree } from '../utils/chatTree'
 
-export const PDFCHAT_VERSION = '1.0.0'
+// 1.1.0: messages form a tree (parentId / activeChildId / rootActiveId)
+export const PDFCHAT_VERSION = '1.1.0'
 
 const clone = (value) => JSON.parse(JSON.stringify(value))
 const now = () => new Date().toISOString()
 
 function findSession(state, id) {
   return state.sessions.find(s => s.id === id) || null
+}
+
+function setActiveChild(session, parentId, childId) {
+  if (parentId == null) {
+    session.rootActiveId = childId
+  } else {
+    const parent = session.messages.find(m => m.id === parentId)
+    if (parent) parent.activeChildId = childId
+  }
 }
 
 function findMessage(state, sessionId, messageId) {
@@ -39,9 +50,13 @@ export function sanitizeSessions(data) {
       // Model chosen for this session; null follows the default from Settings
       provider: typeof s.provider === 'string' && LLM_PROVIDERS[s.provider] ? s.provider : null,
       model: typeof s.model === 'string' && s.model ? s.model : null,
-      messages: s.messages
-        .filter(m => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-        .map(m => ({ ...m, contexts: Array.isArray(m.contexts) ? m.contexts : [], pending: false }))
+      // Flat lists from 1.0.0 files become a single chain
+      ...normalizeTree(
+        s.messages
+          .filter(m => m && typeof m.id === 'string' && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+          .map(m => ({ ...m, contexts: Array.isArray(m.contexts) ? m.contexts : [], pending: false })),
+        s.rootActiveId
+      )
     }))
 }
 
@@ -68,6 +83,8 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
 
     getters: {
       activeSession: (state) => findSession(state, state.activeSessionId),
+      // Visible conversation of the active session (one branch of its tree)
+      activeMessages: (state, getters) => activePath(getters.activeSession),
       // true / false / null (unknown) for the selected model
       // Provider + model for the active session: its own choice, else the
       // default from Settings. isDefault tells the UI which one applies.
@@ -146,11 +163,17 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           state.activeSessionId = [...state.sessions].sort((a, b) => b.modified.localeCompare(a.modified))[0]?.id || null
         }
       },
+      // Adds a message under message.parentId and shows it (branch pointer)
       ADD_MESSAGE(state, { sessionId, message }) {
         const session = findSession(state, sessionId)
         if (!session) return
         session.messages.push(message)
+        setActiveChild(session, message.parentId ?? null, message.id)
         session.modified = now()
+      },
+      SET_ACTIVE_CHILD(state, { sessionId, parentId, childId }) {
+        const session = findSession(state, sessionId)
+        if (session) setActiveChild(session, parentId, childId)
       },
       APPEND_TO_MESSAGE(state, { sessionId, messageId, content, reasoning }) {
         const message = findMessage(state, sessionId, messageId)
@@ -162,9 +185,15 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const message = findMessage(state, sessionId, messageId)
         if (message) Object.assign(message, patch)
       },
-      REMOVE_MESSAGE(state, { sessionId, messageId }) {
+      REMOVE_MESSAGES(state, { sessionId, ids }) {
         const session = findSession(state, sessionId)
-        if (session) session.messages = session.messages.filter(m => m.id !== messageId)
+        if (!session) return
+        const remove = new Set(ids)
+        session.messages = session.messages.filter(m => !remove.has(m.id))
+        // Clear pointers to removed messages (activePath then picks a sibling)
+        if (remove.has(session.rootActiveId)) session.rootActiveId = null
+        for (const m of session.messages) if (remove.has(m.activeChildId)) m.activeChildId = null
+        session.modified = now()
       },
       SET_STREAMING(state, streaming) {
         state.streaming = streaming
@@ -236,6 +265,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           visionEnabled: null,
           provider: null,
           model: null,
+          rootActiveId: null,
           messages: []
         }
         commit('ADD_SESSION', session)
@@ -273,9 +303,13 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const session = getters.activeSession
         if (session.messages.length === 0) commit('RENAME_SESSION', { id: sessionId, title: sessionTitleFrom(input || 'Selected context') })
 
+        // Continue the visible branch
+        const path = activePath(getters.activeSession)
         const userMessage = {
           id: uuidv4(),
           role: 'user',
+          parentId: path.length ? path[path.length - 1].id : null,
+          activeChildId: null,
           content: input,
           contexts: clone(state.attachedContexts),
           created: now()
@@ -289,10 +323,10 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       // Request an assistant reply to the given user message (also used by retry)
       async generateReply({ commit, dispatch, state, getters, rootState, rootGetters }, { sessionId, userMessageId }) {
         const session = findSession(state, sessionId)
-        const index = session?.messages.findIndex(m => m.id === userMessageId) ?? -1
-        if (index === -1) return false
-        const userMessage = session.messages[index]
-        const history = session.messages.slice(0, index)
+        const userMessage = session?.messages.find(m => m.id === userMessageId)
+        if (!userMessage) return false
+        // Only this branch's turns are sent, never other branches
+        const history = ancestorsOf(session, userMessageId)
 
         const llm = rootState.settings.llm
         // The session's own model when chosen, else the Settings default
@@ -302,6 +336,8 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const assistantMessage = {
           id: uuidv4(),
           role: 'assistant',
+          parentId: userMessage.id,
+          activeChildId: null,
           content: '',
           reasoning: '',
           model,
@@ -462,15 +498,17 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         if (session.messages.length) return dispatch('persist')
       },
 
-      // Regenerate the last assistant reply of the active session
+      // Retry the last reply of the visible branch in place (no new branch).
+      // Used for failed or stopped replies; Regenerate creates a branch instead.
       retry({ commit, dispatch, state, getters }, { withoutImages = false } = {}) {
         const session = getters.activeSession
         if (!session || state.streaming) return false
         if (withoutImages) commit('SET_SESSION_VISION', { id: session.id, value: false })
-        const last = session.messages[session.messages.length - 1]
-        const previous = session.messages[session.messages.length - 2]
+        const path = activePath(session)
+        const last = path[path.length - 1]
+        const previous = path[path.length - 2]
         if (last?.role !== 'assistant' || previous?.role !== 'user') return false
-        commit('REMOVE_MESSAGE', { sessionId: session.id, messageId: last.id })
+        commit('REMOVE_MESSAGES', { sessionId: session.id, ids: [last.id] })
         return dispatch('generateReply', { sessionId: session.id, userMessageId: previous.id })
       },
 
