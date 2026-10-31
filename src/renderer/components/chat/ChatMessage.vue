@@ -1,11 +1,20 @@
 <template>
   <div
     class="chat-message"
-    :class="[`chat-message-${message.role}`, { 'chat-message-error': message.error && message.error.code !== 'aborted' }]"
+    :class="[`chat-message-${message.role}`, { 'chat-message-error': message.error && message.error.code !== 'aborted', editing }]"
+    :data-message-id="message.id"
   >
+    <!-- Editing a user message before regenerating -->
+    <ChatEditBox
+      v-if="editing"
+      :message="message"
+      @submit="$emit('submit-edit', $event)"
+      @cancel="$emit('cancel-edit')"
+    />
+
     <!-- Contexts that were attached to this user message -->
     <div
-      v-if="message.role === 'user' && message.contexts && message.contexts.length"
+      v-if="!editing && message.role === 'user' && message.contexts && message.contexts.length"
       class="chat-message-contexts"
     >
       <button
@@ -21,7 +30,7 @@
       </button>
     </div>
 
-    <template v-if="message.role === 'user'">
+    <template v-if="message.role === 'user' && !editing">
       <div
         v-if="message.content"
         class="chat-bubble"
@@ -45,9 +54,84 @@
         /><path d="M2.5 10.5l3-3 3 3 2-2 3 3" /></svg>
         {{ message.images.length === 1 ? 'Page' : 'Pages' }} {{ message.images.map(i => i.page).join(', ') }} sent as {{ message.images.length === 1 ? 'an image' : 'images' }}
       </div>
+
+      <!-- Edit + branch navigation (shown where the conversation diverged) -->
+      <div
+        class="chat-user-actions"
+        :class="{ 'has-branches': siblingCount > 1 }"
+      >
+        <template v-if="confirmingDelete">
+          <span class="chat-branch-confirm">Delete this branch?</span>
+          <button
+            class="chat-action danger"
+            @click="confirmingDelete = false; $emit('delete-branch')"
+          >
+            Delete
+          </button>
+          <button
+            class="chat-action"
+            @click="confirmingDelete = false"
+          >
+            Cancel
+          </button>
+        </template>
+        <template v-else>
+          <div
+            v-if="siblingCount > 1"
+            class="chat-branch-nav"
+          >
+            <button
+              class="chat-branch-btn"
+              title="Previous branch"
+              :disabled="locked || siblingIndex <= 1"
+              @click="$emit('switch-branch', -1)"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+              ><path d="M10 4L6 8l4 4" /></svg>
+            </button>
+            <span class="chat-branch-count">{{ siblingIndex }} / {{ siblingCount }}</span>
+            <button
+              class="chat-branch-btn"
+              title="Next branch"
+              :disabled="locked || siblingIndex >= siblingCount"
+              @click="$emit('switch-branch', 1)"
+            >
+              <svg
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+              ><path d="M6 4l4 4-4 4" /></svg>
+            </button>
+          </div>
+          <button
+            class="chat-branch-btn"
+            title="Edit and regenerate"
+            :disabled="locked"
+            @click="$emit('edit')"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M11.5 2.5l2 2L6 12H4v-2z" /></svg>
+          </button>
+          <button
+            v-if="siblingCount > 1"
+            class="chat-branch-btn"
+            title="Delete this branch"
+            :disabled="locked"
+            @click="confirmingDelete = true"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M3 4.5h10M6.5 4.5V3h3v1.5M5 4.5l.5 8.5h5l.5-8.5" /></svg>
+          </button>
+        </template>
+      </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="message.role === 'assistant'">
       <details
         v-if="message.reasoning"
         class="chat-reasoning"
@@ -105,12 +189,21 @@
           {{ copied ? 'Copied' : 'Copy' }}
         </button>
         <button
-          v-if="isLast"
+          v-if="message.error && message.error.code !== 'aborted' && isLast"
           class="chat-action"
-          title="Generate the reply again"
+          title="Try the same request again"
+          :disabled="locked"
           @click="$emit('retry')"
         >
           Retry
+        </button>
+        <button
+          class="chat-action"
+          title="Edit the question and generate a new reply (creates a branch)"
+          :disabled="locked"
+          @click="$emit('regenerate')"
+        >
+          Regenerate
         </button>
         <span
           v-if="message.model"
@@ -126,6 +219,7 @@
 import { computed, ref } from 'vue'
 import { useStore } from 'vuex'
 import { renderMarkdown } from '../../utils/markdown'
+import ChatEditBox from './ChatEditBox.vue'
 
 let clipboard = null
 try {
@@ -137,16 +231,25 @@ try {
 export default {
   name: 'ChatMessage',
 
+  components: { ChatEditBox },
+
   props: {
     message: { type: Object, required: true },
-    isLast: { type: Boolean, default: false }
+    isLast: { type: Boolean, default: false },
+    editing: { type: Boolean, default: false },
+    // Branch controls are disabled while a reply streams
+    locked: { type: Boolean, default: false },
+    // Position among the alternatives at this message's fork
+    siblingIndex: { type: Number, default: 1 },
+    siblingCount: { type: Number, default: 1 }
   },
 
-  emits: ['retry', 'open-context'],
+  emits: ['retry', 'regenerate', 'edit', 'submit-edit', 'cancel-edit', 'switch-branch', 'delete-branch', 'open-context'],
 
   setup(props) {
     const store = useStore()
     const copied = ref(false)
+    const confirmingDelete = ref(false)
 
     // renderMarkdown sanitizes its output (LLM text is untrusted)
     const rendered = computed(() => renderMarkdown(props.message.content, {
@@ -161,7 +264,7 @@ export default {
       setTimeout(() => { copied.value = false }, 1200)
     }
 
-    return { rendered, copied, copy }
+    return { rendered, copied, copy, confirmingDelete }
   }
 }
 </script>
@@ -402,6 +505,92 @@ export default {
   stroke: currentColor;
   stroke-width: 1.3;
   stroke-linejoin: round;
+}
+
+.chat-message.editing {
+  align-items: flex-end;
+}
+
+.chat-user-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 20px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+/* Where the conversation diverged, the branch arrows stay visible */
+.chat-message:hover .chat-user-actions,
+.chat-user-actions.has-branches,
+.chat-user-actions:focus-within {
+  opacity: 1;
+}
+
+.chat-branch-nav {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  margin-right: 2px;
+  padding: 0 2px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+}
+
+.chat-branch-count {
+  min-width: 34px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-branch-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.chat-branch-btn:hover:not(:disabled) {
+  background: var(--sidebar-bg);
+  color: var(--text-color);
+}
+
+.chat-branch-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.chat-branch-btn svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-branch-confirm {
+  font-size: 11px;
+  color: var(--text-color);
+  margin-right: 4px;
+}
+
+.chat-action.danger {
+  color: var(--danger-color);
+}
+
+.chat-action:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .chat-stopped {

@@ -433,7 +433,7 @@ export default {
 
     const handleGlobalKeydown = (e) => {
       // Esc leaves full-screen chat (unless a modal is open on top of it)
-      if (e.key === 'Escape' && store.state.chat.fullscreen && !settingsModalOpen.value) {
+      if (e.key === 'Escape' && !e.defaultPrevented && store.state.chat.fullscreen && !settingsModalOpen.value) {
         e.preventDefault()
         store.dispatch('chat/setFullscreen', false)
         return

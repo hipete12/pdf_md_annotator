@@ -133,7 +133,17 @@
           :key="message.id"
           :message="message"
           :is-last="index === messages.length - 1"
+          :editing="editingId === message.id"
+          :locked="isStreaming"
+          :sibling-index="branchInfo(message).index"
+          :sibling-count="branchInfo(message).count"
           @retry="retry"
+          @regenerate="startEdit(message.parentId)"
+          @edit="startEdit(message.id)"
+          @submit-edit="submitEdit(message.id, $event)"
+          @cancel-edit="cancelEdit"
+          @switch-branch="switchBranch(message.id, $event)"
+          @delete-branch="deleteBranch(message.id)"
           @open-context="openContext"
         />
       </div>
@@ -222,7 +232,7 @@
           :placeholder="hasModel ? 'Ask about this document…' : 'Choose a model below or in Settings'"
           :disabled="!hasModel"
           @input="autoGrow"
-          @keydown.enter.exact.prevent="send()"
+          @keydown="onComposerKeydown"
         />
         <button
           v-if="hasModel && modelVision !== false"
@@ -454,6 +464,53 @@ export default {
       stickToBottom.value = true
       store.dispatch('chat/retry', options)
     }
+
+    // Enter sends, Shift+Enter is a newline; ignore Enter while an IME
+    // (Chinese/Japanese/Korean input) is still composing
+    const onComposerKeydown = (event) => {
+      if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
+      if (event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      send()
+    }
+
+    // --- Edit & regenerate, branches ---------------------------------------
+    // Only one message is edited at a time; the edit box cancels itself on
+    // Esc, on clicks outside it and when focus moves to another text field.
+    const editingId = ref(null)
+
+    const startEdit = (messageId) => {
+      if (isStreaming.value || !messageId) return
+      editingId.value = messageId
+    }
+    const cancelEdit = () => { editingId.value = null }
+    const submitEdit = async (messageId, { text, contexts }) => {
+      editingId.value = null
+      stickToBottom.value = true
+      await store.dispatch('chat/editAndRegenerate', { messageId, text, contexts })
+    }
+
+    // Alternatives at each message's fork: { index (1-based), count }
+    const branchInfo = (message) => {
+      const session = activeSession.value
+      if (!session || message.role !== 'user') return { index: 1, count: 1 }
+      const siblings = session.messages.filter(m => m.role === 'user' && (m.parentId ?? null) === (message.parentId ?? null))
+      return { index: siblings.findIndex(m => m.id === message.id) + 1, count: siblings.length }
+    }
+    const switchBranch = (messageId, offset) => {
+      cancelEdit()
+      store.dispatch('chat/switchSibling', { messageId, offset })
+    }
+    const deleteBranch = (messageId) => {
+      cancelEdit()
+      store.dispatch('chat/deleteBranch', messageId)
+    }
+
+    // An edit never survives a session switch or its message leaving the view
+    watch(activeSessionId, cancelEdit)
+    watch(messages, (list) => {
+      if (editingId.value && !list.some(m => m.id === editingId.value)) cancelEdit()
+    })
     const dismissNotice = () => store.commit('chat/SET_NOTICE', '')
 
     // --- Sessions ----------------------------------------------------------
@@ -583,6 +640,14 @@ export default {
     scrollToBottom()
 
     return {
+      onComposerKeydown,
+      editingId,
+      startEdit,
+      cancelEdit,
+      submitEdit,
+      branchInfo,
+      switchBranch,
+      deleteBranch,
       modelVision,
       imagesEnabled,
       visionTitle,

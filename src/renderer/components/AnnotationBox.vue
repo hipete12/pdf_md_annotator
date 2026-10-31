@@ -336,6 +336,9 @@ export default {
     // Global keyboard handler for Ctrl+H and Delete
     const handleKeydown = (e) => {
       if (!isSelected.value) return
+      // Keys typed in the chat panel (message box, edit box) are not meant
+      // for the selected note (e.g. Ctrl+H would hide it)
+      if (e.target?.closest?.('.chat-panel')) return
       
       // Delete key - delete annotation
       if (e.key === 'Delete' || e.key === 'Backspace') {
