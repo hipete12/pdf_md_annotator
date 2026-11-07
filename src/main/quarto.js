@@ -130,7 +130,12 @@ function renderDocument({ quartoPath, version = '', content, run, cacheDir, sign
 
   fs.mkdirSync(workDir, { recursive: true })
   fs.writeFileSync(path.join(workDir, 'document.qmd'), content, 'utf8')
-  const args = ['render', 'document.qmd', '--to', 'html', run ? '--execute' : '--no-execute', '-M', 'embed-resources:true']
+  // MathML instead of MathJax: MathJax loads from a CDN, which needs a
+  // network and is blocked by the viewer's content security policy
+  const args = [
+    'render', 'document.qmd', '--to', 'html', run ? '--execute' : '--no-execute',
+    '-M', 'embed-resources:true', '-M', 'html-math-method:mathml'
+  ]
 
   return new Promise((resolve, reject) => {
     let log = ''
@@ -181,4 +186,75 @@ function renderDocument({ quartoPath, version = '', content, run, cacheDir, sign
   })
 }
 
-module.exports = { candidatePaths, findQuarto, renderDocument, QuartoError }
+function decodeDataUrl(url) {
+  const match = String(url).match(/^data:([^,]*?),([\s\S]*)$/)
+  if (!match) return null
+  const isBase64 = /;base64$/i.test(match[1])
+  try {
+    return isBase64 ? Buffer.from(match[2], 'base64').toString('utf8') : decodeURIComponent(match[2])
+  } catch {
+    return null
+  }
+}
+
+// Runs first inside the sandboxed viewer frame. The frame has an opaque
+// origin, so storage APIs throw: give Quarto's scripts in-memory stand-ins.
+// Web links are opened through window.open, which the main process hands to
+// the system browser.
+const VIEWER_BRIDGE = `<script>(function () {
+  function memoryStorage() {
+    var data = {};
+    return {
+      getItem: function (k) { return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+      setItem: function (k, v) { data[k] = String(v); },
+      removeItem: function (k) { delete data[k]; },
+      clear: function () { data = {}; },
+      key: function (i) { return Object.keys(data)[i] || null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  ['localStorage', 'sessionStorage'].forEach(function (name) {
+    try { window[name].getItem('probe'); } catch (e) {
+      try { Object.defineProperty(window, name, { value: memoryStorage(), configurable: true }); } catch (e2) {}
+    }
+  });
+  document.addEventListener('click', function (event) {
+    var link = event.target && event.target.closest && event.target.closest('a[href]');
+    if (!link) return;
+    var href = link.getAttribute('href') || '';
+    if (href.charAt(0) === '#') return;
+    if (/^(https?:|mailto:)/i.test(link.href)) {
+      event.preventDefault();
+      window.open(link.href, '_blank', 'noopener');
+    }
+  }, true);
+})();</script>`
+
+/**
+ * Make Quarto's self-contained HTML work in the sandboxed viewer frame, which
+ * inherits the app's content security policy (no data: scripts or styles):
+ * data: scripts and stylesheets are inlined, and the bridge script is added.
+ * @param {string} html
+ * @returns {string}
+ */
+function prepareForViewer(html) {
+  let out = String(html)
+    .replace(/<script\b([^>]*?)\ssrc="(data:[^"]*)"([^>]*)>\s*<\/script>/gi, (match, before, url, after) => {
+      const code = decodeDataUrl(url)
+      if (code === null) return match
+      return `<script${before}${after}>${code.replace(/<\/script/gi, '<\\/script')}</script>`
+    })
+    .replace(/<link\b([^>]*?)\shref="(data:text\/css[^"]*)"([^>]*)>/gi, (match, before, url, after) => {
+      if (!/rel=["']?stylesheet/i.test(before + after)) return match
+      const css = decodeDataUrl(url)
+      if (css === null) return match
+      const id = (before + after).match(/\sid="([^"]*)"/)
+      return `<style${id ? ` id="${id[1]}"` : ''}>${css.replace(/<\/style/gi, '<\\/style')}</style>`
+    })
+  out = /<head[^>]*>/i.test(out)
+    ? out.replace(/<head[^>]*>/i, (head) => `${head}\n${VIEWER_BRIDGE}`)
+    : `${VIEWER_BRIDGE}\n${out}`
+  return out
+}
+
+module.exports = { candidatePaths, findQuarto, renderDocument, prepareForViewer, QuartoError }

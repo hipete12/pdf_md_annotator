@@ -88,6 +88,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   chat: {
     // Folder for standalone chats ('' = Documents/PDF Annotator/Chats)
     chatsFolder: '',
+    // Share of the window used by the document viewer next to a chat
+    docPaneRatio: 0.5,
     panelVisible: false,
     panelWidth: 420,
     // Attach rendered page images for vision-capable models

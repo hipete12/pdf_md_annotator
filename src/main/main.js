@@ -13,7 +13,7 @@ const {
 const { codeCellLanguages } = require('../common/docGen')
 const { listModels } = require('./llm')
 const { runAgent } = require('./agent')
-const { findQuarto, renderDocument } = require('./quarto')
+const { findQuarto, renderDocument, prepareForViewer } = require('./quarto')
 const crypto = require('crypto')
 const { createSecrets } = require('./secrets')
 
@@ -842,7 +842,7 @@ ipcMain.handle('doc:render', async (event, { chatPath, run = false }) => {
       cacheDir: path.join(app.getPath('userData'), 'quarto-renders'),
       signal: controller.signal
     })
-    return { success: true, html: result.html, cached: result.cached, run: execute, docName: path.basename(docPath), quartoVersion: quarto.version }
+    return { success: true, html: prepareForViewer(result.html), cached: result.cached, run: execute, docName: path.basename(docPath), quartoVersion: quarto.version }
   } catch (err) {
     if (err.code !== 'cancelled') log.warn('Quarto render failed:', err.message)
     return { success: false, code: err.code || 'render', error: err.message, log: err.log || '' }

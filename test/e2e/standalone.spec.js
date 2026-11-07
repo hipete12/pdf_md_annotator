@@ -176,4 +176,79 @@ test.describe('Standalone chat', () => {
     expect(request.tools).toBeUndefined()
     await window.screenshot({ path: path.join(__dirname, '../../test-results/generate.png') })
   })
+
+  test('/open shows the rendered document next to the chat; /open run asks first', async () => {
+    test.setTimeout(180000)
+    const { findQuarto } = require('../../src/main/quarto')
+    test.skip(!(await findQuarto('', { refresh: true })), 'Quarto is not installed')
+    await app.close()
+    fake.server.close()
+    const qmd = [
+      '---', 'title: "Entropy notes"', 'format:', '  html:', '    toc: true', '---', '',
+      '## Key ideas', '', 'Entropy $S = k \\ln W$ measures [disorder](https://example.org/entropy).', '',
+      '```{mermaid}', 'flowchart LR', '  A[Order] --> B[Disorder]', '```', '',
+      '```{python}', 'print(1 + 1)', '```', ''
+    ].join('\n')
+    fake = await startFakeLlm((body, i) => (i === 0 ? 'Entropy measures disorder.' : qmd))
+    ;({ app, window, tempDir } = await launchWithSettings((dir) => {
+      chats = path.join(dir, 'chats')
+      return {
+        llm: { provider: 'custom', baseUrls: { custom: fake.baseUrl }, models: { custom: 'fake-model' } },
+        chat: { chatsFolder: chats },
+        tools: { webStandalone: false }
+      }
+    }))
+    await window.getByRole('button', { name: /New chat/ }).click()
+    await window.fill('.chat-input', '/open')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.doc-message')).toContainText('No document yet')
+
+    await window.fill('.chat-input', 'Explain entropy')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-send.stop')).toHaveCount(0)
+    await window.fill('.chat-input', '/generate')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.doc-event.done')).toBeVisible()
+
+    // The open viewer re-renders after /generate
+    const frame = window.frameLocator('.doc-frame')
+    await expect(frame.locator('h2', { hasText: 'Key ideas' })).toBeVisible({ timeout: 90000 })
+    await expect(frame.locator('math')).toHaveCount(1)
+    await expect(frame.locator('.cell-output')).toHaveCount(0)
+    // Mermaid runs inside the sandboxed frame (inlined scripts work)
+    await expect(frame.locator('svg[id^="mermaid"], pre.mermaid svg, .mermaid svg').first()).toBeVisible({ timeout: 30000 })
+    await expect(window.locator('.doc-badge')).toHaveText('Code not run')
+    await window.screenshot({ path: path.join(__dirname, '../../test-results/open.png') })
+
+    // The frame cannot reach the app (no Node, opaque origin)
+    const isolated = await frame.locator('body').evaluate(() => {
+      let parentAccess = true
+      try { void window.parent.document } catch (e) { parentAccess = false }
+      return { node: typeof require !== 'undefined', parentAccess }
+    })
+    expect(isolated).toEqual({ node: false, parentAccess: false })
+
+    // Links open in the system browser; the frame keeps showing the document
+    await app.evaluate(({ shell }) => {
+      global.__opened = []
+      shell.openExternal = async (url) => { global.__opened.push(url) }
+    })
+    await frame.locator('a', { hasText: 'disorder' }).click()
+    await expect.poll(() => app.evaluate(() => global.__opened)).toEqual(['https://example.org/entropy'])
+    await expect(frame.locator('h2', { hasText: 'Key ideas' })).toBeVisible()
+
+    // /open run asks before running model-written code
+    await app.evaluate(({ dialog }) => {
+      global.__runPrompt = null
+      dialog.showMessageBox = async (win, options) => { global.__runPrompt = options.message; return { response: 2 } }
+    })
+    await window.fill('.chat-input', '/open run')
+    await window.press('.chat-input', 'Enter')
+    await expect.poll(() => app.evaluate(() => global.__runPrompt)).toBe('Run 1 code cell (1 python)?')
+    await expect(window.locator('.doc-badge')).toHaveText('Code not run')
+
+    await window.fill('.chat-input', '/close')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.doc-viewer')).toHaveCount(0)
+  })
 })

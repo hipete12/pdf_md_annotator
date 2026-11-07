@@ -35,6 +35,11 @@
         @new-chat="newChat"
         @save-as="saveChatAs"
       />
+      <DocumentViewer
+        v-if="viewerOpen"
+        :key="`doc-${chatPath}`"
+        @open-settings="openSettings"
+      />
     </div>
 
     <!-- Main content -->
@@ -93,6 +98,7 @@ import PdfViewer from './components/PdfViewer.vue'
 import WelcomeScreen from './components/WelcomeScreen.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import ChatPanel from './components/chat/ChatPanel.vue'
+import DocumentViewer from './components/DocumentViewer.vue'
 
 // Safely get ipcRenderer
 let ipcRenderer = null
@@ -129,7 +135,8 @@ export default {
     PdfViewer,
     WelcomeScreen,
     SettingsModal,
-    ChatPanel
+    ChatPanel,
+    DocumentViewer
   },
   
   setup() {
@@ -148,6 +155,7 @@ export default {
     const pdfDocument = computed(() => store.state.pdfDocument)
     const mode = computed(() => store.state.mode)
     const chatPath = computed(() => store.state.chatPath)
+    const viewerOpen = computed(() => mode.value === 'chat' && store.state.chat.viewer.open)
     const sidebarVisible = computed(() => store.state.sidebarVisible)
     const settingsModalOpen = computed(() => store.state.settingsModalOpen)
     const settings = computed(() => store.state.settings)
@@ -655,6 +663,7 @@ export default {
       toggleChat,
       mode,
       chatPath,
+      viewerOpen,
       newChat,
       openRecent,
       saveChatAs,

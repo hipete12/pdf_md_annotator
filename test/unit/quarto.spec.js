@@ -108,3 +108,22 @@ describe('Quarto', function () {
     expect(result.html).to.match(/print/)
   })
 })
+
+describe('prepareForViewer', () => {
+  const { prepareForViewer } = require('../../src/main/quarto')
+
+  it('inlines data: scripts and stylesheets and adds the bridge first in <head>', () => {
+    const js = Buffer.from('console.log("</script>")').toString('base64')
+    const html = `<html><head><meta charset="utf-8"><script src="data:application/javascript;base64,${js}"></script>` +
+      `<link href="data:text/css,body%7Bcolor%3Ared%7D" rel="stylesheet" id="quarto-text-highlighting-styles">` +
+      '<link href="data:image/png;base64,AAAA" rel="icon"></head><body><img src="data:image/png;base64,AAAA"></body></html>'
+    const out = prepareForViewer(html)
+    expect(out).to.contain('<script>console.log("<\\/script>")</script>')
+    expect(out).to.contain('<style id="quarto-text-highlighting-styles">body{color:red}</style>')
+    expect(out).to.contain('<link href="data:image/png;base64,AAAA" rel="icon">')
+    expect(out).to.contain('<img src="data:image/png;base64,AAAA">')
+    expect(out.indexOf('memoryStorage')).to.be.above(out.indexOf('<head>'))
+    expect(out.indexOf('memoryStorage')).to.be.below(out.indexOf('<meta charset'))
+    expect(out).to.not.contain('src="data:application/javascript')
+  })
+})
