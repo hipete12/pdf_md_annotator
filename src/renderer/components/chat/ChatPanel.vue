@@ -193,10 +193,12 @@
           </div>
         </div>
 
-        <ChatMessage
+        <template
           v-for="(message, index) in messages"
           :key="message.id"
-          :message="message"
+        >
+          <ChatMessage
+            :message="message"
           :is-last="index === messages.length - 1"
           :editing="editingId === message.id"
           :locked="isStreaming"
@@ -210,7 +212,15 @@
           @switch-branch="switchBranch(message.id, $event)"
           @delete-branch="deleteBranch(message.id)"
           @open-context="openContext"
-        />
+          />
+          <ChatDocEvent
+            v-for="event in docEventsAfter(message.id)"
+            :key="event.id"
+            :event="event"
+            :is-latest="event.id === latestDocEventId"
+            @open="runCommandText('/open')"
+          />
+        </template>
       </div>
     </div>
 
@@ -287,6 +297,24 @@
           </button>
         </div>
       </div>
+      <ul
+        v-if="commandSuggestions.length"
+        class="chat-commands"
+        role="listbox"
+        aria-label="Commands"
+      >
+        <li
+          v-for="(command, i) in commandSuggestions"
+          :key="command.name"
+          role="option"
+          :aria-selected="i === commandIndex"
+          :class="{ active: i === commandIndex }"
+          @mousedown.prevent="applyCommand(command)"
+        >
+          <code>{{ command.usage }}</code>
+          <span>{{ command.description }}</span>
+        </li>
+      </ul>
       <div
         class="chat-input-wrap"
         :class="{ disabled: !hasModel }"
@@ -394,6 +422,8 @@ import ChatMessage from './ChatMessage.vue'
 import ChatSessionList from './ChatSessionList.vue'
 import ChatModelPicker from './ChatModelPicker.vue'
 import ChatBranchMap from './ChatBranchMap.vue'
+import ChatDocEvent from './ChatDocEvent.vue'
+import { listCommands, parseCommand } from '../../../common/docGen'
 import { describePageRanges } from '../../utils/chatPrompt'
 import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
 
@@ -403,7 +433,7 @@ const DEFAULT_WIDTH = 420
 export default {
   name: 'ChatPanel',
 
-  components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap },
+  components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap, ChatDocEvent },
 
   props: {
     // Standalone chat (no PDF): fills the window, one session per file
@@ -426,7 +456,8 @@ export default {
     const sortedSessions = computed(() => store.getters['chat/sortedSessions'])
     // Visible branch of the session's conversation tree
     const messages = computed(() => store.getters['chat/activeMessages'])
-    const isStreaming = computed(() => store.getters['chat/isStreaming'])
+    // Busy while a reply streams or /generate writes the document
+    const isStreaming = computed(() => store.getters['chat/isBusy'])
     const fullscreen = computed(() => chat.value.fullscreen)
     const status = computed(() => chat.value.status)
     const notice = computed(() => chat.value.notice)
@@ -589,8 +620,47 @@ export default {
       el.style.height = `${Math.min(el.scrollHeight, 200)}px`
     }
 
+    // --- Slash commands (standalone chats) ----------------------------------
+    const commandIndex = ref(0)
+    const commandsDismissed = ref(false)
+    watch(draft, () => {
+      commandIndex.value = 0
+      commandsDismissed.value = false
+    })
+    const commandSuggestions = computed(() => {
+      if (!props.standalone || commandsDismissed.value) return []
+      const value = draft.value
+      if (!value.startsWith('/') || value.includes('\n')) return []
+      const typed = value.slice(1)
+      // Hide once the user is typing the /generate instructions
+      if (/^generate\s+\S/i.test(typed)) return []
+      return listCommands(value)
+    })
+    const applyCommand = (command) => {
+      draft.value = command.name === 'generate' ? '/generate ' : `/${command.name}`
+      nextTick(() => input.value?.focus())
+    }
+    const docEvents = computed(() => activeSession.value?.docEvents || [])
+    const docEventsAfter = (messageId) => docEvents.value.filter(e => e.afterMessageId === messageId)
+    const latestDocEventId = computed(() => [...docEvents.value].reverse().find(e => e.status === 'done')?.id || null)
+    const runCommandText = async (text) => {
+      stickToBottom.value = true
+      return store.dispatch('chat/runCommand', text)
+    }
+
     const send = async (text) => {
       const content = text ?? draft.value
+      // Commands are handled by the app, never sent to the model
+      if (parseCommand(content)) {
+        if (isStreaming.value) return
+        if (text === undefined) {
+          draft.value = ''
+          await nextTick()
+          autoGrow()
+        }
+        await runCommandText(content)
+        return
+      }
       if (!hasModel.value || isStreaming.value) return
       if (!content.trim() && chat.value.attachedContexts.length === 0) return
       if (text === undefined) {
@@ -611,9 +681,34 @@ export default {
     // Enter sends, Shift+Enter is a newline; ignore Enter while an IME
     // (Chinese/Japanese/Korean input) is still composing
     const onComposerKeydown = (event) => {
+      const suggestions = commandSuggestions.value
+      if (suggestions.length && !event.isComposing) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          const step = event.key === 'ArrowDown' ? 1 : -1
+          commandIndex.value = (commandIndex.value + step + suggestions.length) % suggestions.length
+          return
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault()
+          applyCommand(suggestions[commandIndex.value])
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          commandsDismissed.value = true
+          return
+        }
+      }
       if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
       if (event.isComposing || event.keyCode === 229) return
       event.preventDefault()
+      // "/gen" + Enter completes the highlighted command first
+      if (suggestions.length && !parseCommand(draft.value)) {
+        applyCommand(suggestions[commandIndex.value])
+        return
+      }
       send()
     }
 
@@ -808,6 +903,12 @@ export default {
     return {
       chatName,
       chatPath,
+      commandSuggestions,
+      commandIndex,
+      applyCommand,
+      docEventsAfter,
+      latestDocEventId,
+      runCommandText,
       webEnabled,
       modelTools,
       webTitle,
@@ -902,6 +1003,40 @@ export default {
   width: auto;
   min-width: 320px;
   border-left: none;
+}
+
+.chat-commands {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--annotation-bg);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+}
+
+.chat-commands li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.chat-commands li.active,
+.chat-commands li:hover {
+  background: var(--sidebar-bg);
+  color: var(--text-color);
+}
+
+.chat-commands code {
+  flex: none;
+  min-width: 170px;
+  font-family: 'Consolas', monospace;
+  color: var(--primary-color);
 }
 
 .chat-title {

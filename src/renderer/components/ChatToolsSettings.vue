@@ -159,6 +159,37 @@
         Placeholder: <code v-pre>{{title}}</code> (the chat's name).
       </p>
     </div>
+
+    <h3 class="settings-section-title tools-subtitle">
+      Documents
+    </h3>
+    <div class="settings-row-full">
+      <div class="ai-template-head">
+        <label
+          class="settings-label"
+          for="tools-generate-template"
+        ><code>/generate</code> instruction</label>
+        <button
+          class="ai-link"
+          @click="updateSetting('llm.generateTemplate', defaults.llm.generateTemplate)"
+        >
+          Reset
+        </button>
+      </div>
+      <textarea
+        id="tools-generate-template"
+        class="settings-textarea"
+        rows="10"
+        :value="llm.generateTemplate"
+        spellcheck="false"
+        @change="updateSetting('llm.generateTemplate', $event.target.value)"
+      />
+      <p class="settings-hint">
+        Placeholders: <code v-pre>{{conversation}}</code>, <code v-pre>{{current_document}}</code>,
+        <code v-pre>{{steer}}</code> (text after /generate), <code v-pre>{{title}}</code>.
+        The document is saved as &lt;chat name&gt;.qmd next to the chat.
+      </p>
+    </div>
   </div>
 </template>
 

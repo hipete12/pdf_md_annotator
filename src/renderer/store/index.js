@@ -620,7 +620,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
     
       // Back to the welcome screen
       async closeWorkspace({ commit, dispatch, state }) {
-        if (state.chat.streaming) await dispatch('chat/stop')
+        if (state.chat.streaming || state.chat.generating) await dispatch('chat/stop')
         commit('SHOW_STANDALONE', null)
         commit('chat/RESET')
       },

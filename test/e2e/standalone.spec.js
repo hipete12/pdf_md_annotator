@@ -136,4 +136,44 @@ test.describe('Standalone chat', () => {
       tavily.close()
     }
   })
+
+  test('/generate writes untitled1.qmd from the conversation', async () => {
+    await app.close()
+    fake.server.close()
+    const qmd = '---\ntitle: "Entropy"\nformat:\n  html:\n    toc: true\n---\n\n## Key ideas\n\nEntropy measures disorder.\n'
+    fake = await startFakeLlm((body, i) => (i === 0 ? 'Entropy measures **disorder**.' : '```qmd\n' + qmd + '```'))
+    ;({ app, window, tempDir } = await launchWithSettings((dir) => {
+      chats = path.join(dir, 'chats')
+      return {
+        llm: { provider: 'custom', baseUrls: { custom: fake.baseUrl }, models: { custom: 'fake-model' } },
+        chat: { chatsFolder: chats },
+        tools: { webStandalone: false }
+      }
+    }))
+    await window.getByRole('button', { name: /New chat/ }).click()
+    await window.fill('.chat-input', 'Explain entropy')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-message-assistant .chat-answer')).toBeVisible()
+    await expect(window.locator('.chat-send.stop')).toHaveCount(0)
+
+    // Typing "/" lists the commands; Enter completes the highlighted one
+    await window.fill('.chat-input', '/ge')
+    await expect(window.locator('.chat-commands li')).toHaveCount(1)
+    await window.screenshot({ path: path.join(__dirname, '../../test-results/commands.png') })
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-input')).toHaveValue('/generate ')
+    await window.type('.chat-input', 'focus on examples')
+    await window.press('.chat-input', 'Enter')
+
+    await expect(window.locator('.doc-event.done')).toContainText('Document updated')
+    await expect(window.locator('.doc-event .doc-event-steer')).toHaveText('/generate focus on examples')
+    const docPath = path.join(chats, 'untitled1.qmd')
+    expect(fs.readFileSync(docPath, 'utf8')).toBe(qmd)
+    // The command was not sent as a chat message
+    await expect(window.locator('.chat-bubble')).toHaveCount(1)
+    const request = fake.chatRequests()[1]
+    expect(request.messages[1].content).toContain('Assistant:\nEntropy measures **disorder**.')
+    expect(request.tools).toBeUndefined()
+    await window.screenshot({ path: path.join(__dirname, '../../test-results/generate.png') })
+  })
 })

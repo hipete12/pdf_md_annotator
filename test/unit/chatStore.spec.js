@@ -593,3 +593,107 @@ describe('Web tools in the chat store', () => {
     expect(saved.steps).to.have.length(1)
   })
 })
+
+describe('/generate', () => {
+  async function chatWithReply({ docExists = false } = {}) {
+    const files = { doc: docExists ? '---\ntitle: Old\n---\nold body\n' : null }
+    const ipc = createFakeIpc({
+      'llm:chat-start': () => ({ started: true }),
+      'doc:read': () => ({ success: true, exists: files.doc !== null, content: files.doc || '' }),
+      'doc:write': ({ content }) => { files.doc = content; return { success: true, docPath: '/chats/untitled1.qmd' } }
+    })
+    const store = createAppStore({ ipcRenderer: ipc })
+    store.commit('HYDRATE_SETTINGS', {
+      llm: { provider: 'custom', baseUrls: { custom: 'http://fake/v1' }, models: { custom: 'test-model' } }
+    })
+    await store.dispatch('openStandaloneChat', { chatPath: '/chats/untitled1.chat', data: null })
+    await store.dispatch('chat/sendMessage', { text: 'What is entropy?' })
+    const first = ipc.lastCall('llm:chat-start').payload
+    ipc.emit('llm:chat-delta', { requestId: first.requestId, content: 'Disorder.' })
+    ipc.emit('llm:chat-done', { requestId: first.requestId })
+    await tick(50)
+    return { store, ipc, files }
+  }
+
+  it('writes the document from the conversation without sending a chat message', async () => {
+    const { store, ipc, files } = await chatWithReply()
+    expect(await store.dispatch('chat/runCommand', '/generate focus on examples')).to.equal(true)
+    const start = ipc.lastCall('llm:chat-start').payload
+    expect(start.webTools).to.equal(false)
+    expect(start.messages[1].content).to.contain('User:\nWhat is entropy?\n\nAssistant:\nDisorder.')
+    expect(start.messages[1].content).to.contain('<steer>\nfocus on examples\n</steer>')
+    expect(store.getters['chat/isGenerating']).to.equal(true)
+    expect(await store.dispatch('chat/sendMessage', { text: 'blocked while generating' })).to.equal(false)
+
+    ipc.emit('llm:chat-delta', { requestId: start.requestId, content: '```qmd\n---\ntitle: Entropy\n---\n' })
+    ipc.emit('llm:chat-delta', { requestId: start.requestId, content: '# Entropy\n```' })
+    ipc.emit('llm:chat-done', { requestId: start.requestId, content: '```qmd\n---\ntitle: Entropy\n---\n# Entropy\n```', finishReason: 'stop' })
+    await tick(20)
+
+    expect(files.doc).to.equal('---\ntitle: Entropy\n---\n# Entropy\n')
+    const session = store.getters['chat/activeSession']
+    expect(store.getters['chat/activeMessages']).to.have.length(2) // no message added
+    expect(session.docEvents).to.have.length(1)
+    expect(session.docEvents[0]).to.include({ status: 'done', steer: 'focus on examples', docName: 'untitled1.qmd' })
+    expect(session.document.coveredMessageId).to.equal(store.getters['chat/activeMessages'][1].id)
+    expect(store.state.chat.docVersion).to.equal(1)
+    const saved = ipc.lastCall('chatfile:save').payload.data.sessions[0]
+    expect(saved.docEvents[0].status).to.equal('done')
+  })
+
+  it('updates an existing document and marks the new part of the conversation', async () => {
+    const { store, ipc } = await chatWithReply({ docExists: true })
+    store.commit('chat/SET_SESSION_DOCUMENT', {
+      sessionId: store.getters['chat/activeSession'].id,
+      document: { coveredMessageId: store.getters['chat/activeMessages'][0].id }
+    })
+    await store.dispatch('chat/runCommand', '/generate')
+    const content = ipc.lastCall('llm:chat-start').payload.messages[1].content
+    expect(content).to.contain('<current_document>\n---\ntitle: Old\n---\nold body\n</current_document>')
+    expect(content).to.contain('What is entropy?\n\n--- Everything below is new since the document was last generated ---\n\nAssistant:\nDisorder.')
+  })
+
+  it('does not save a truncated document', async () => {
+    const { store, ipc, files } = await chatWithReply()
+    await store.dispatch('chat/runCommand', '/generate')
+    const { requestId } = ipc.lastCall('llm:chat-start').payload
+    ipc.emit('llm:chat-done', { requestId, content: '---\ntitle: A\n---\n# Half', finishReason: 'length' })
+    await tick(20)
+    expect(files.doc).to.equal(null)
+    const event = store.getters['chat/activeSession'].docEvents[0]
+    expect(event.status).to.equal('error')
+    expect(event.error).to.contain('cut off')
+  })
+
+  it('needs a conversation first, and is limited to standalone chats', async () => {
+    const ipc = createFakeIpc({ 'llm:chat-start': () => ({ started: true }) })
+    const store = createAppStore({ ipcRenderer: ipc })
+    store.commit('HYDRATE_SETTINGS', { llm: { provider: 'custom', models: { custom: 'm' } } })
+    await store.dispatch('openStandaloneChat', { chatPath: '/chats/untitled1.chat', data: null })
+    await store.dispatch('chat/runCommand', '/generate')
+    expect(store.state.chat.notice).to.contain('Chat first')
+    expect(ipc.lastCall('llm:chat-start')).to.equal(undefined)
+
+    const pdf = await setup()
+    expect(await pdf.store.dispatch('chat/runCommand', '/generate')).to.equal(true)
+    expect(pdf.store.state.chat.notice).to.contain('standalone chats')
+    expect(await pdf.store.dispatch('chat/runCommand', 'just text')).to.equal(false)
+  })
+
+  it('/open and /close drive the viewer', async () => {
+    const { store } = await chatWithReply()
+    await store.dispatch('chat/runCommand', '/open run')
+    expect(store.state.chat.viewer).to.include({ open: true, run: true })
+    await store.dispatch('chat/runCommand', '/close')
+    expect(store.state.chat.viewer.open).to.equal(false)
+  })
+
+  it('stop cancels the generation', async () => {
+    const { store, ipc } = await chatWithReply()
+    await store.dispatch('chat/runCommand', '/generate')
+    await store.dispatch('chat/stop')
+    expect(ipc.lastCall('llm:chat-abort')).to.not.equal(undefined)
+    expect(store.getters['chat/activeSession'].docEvents[0].status).to.equal('cancelled')
+    expect(store.getters['chat/isGenerating']).to.equal(false)
+  })
+})

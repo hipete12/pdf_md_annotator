@@ -725,6 +725,39 @@ ipcMain.handle('chatfile:save-as', async (event, { chatPath, data }) => {
   return { success: true, chatPath: targetChat }
 })
 
+// The generated document of a standalone chat. Only "<name>.qmd" next to a
+// "<name>.chat" can be read or written here, and the renderer only writes it
+// for a /generate command.
+function documentPathForChat(chatPath) {
+  if (!isChatFile(chatPath)) throw new Error('Not a chat file')
+  return docPathFor(path.resolve(chatPath))
+}
+
+ipcMain.handle('doc:read', (event, { chatPath }) => {
+  try {
+    const docPath = documentPathForChat(chatPath)
+    if (!fs.existsSync(docPath)) return { success: true, exists: false, docPath, content: '' }
+    return { success: true, exists: true, docPath, content: fs.readFileSync(docPath, 'utf8') }
+  } catch (err) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('doc:write', (event, { chatPath, content }) => {
+  try {
+    const docPath = documentPathForChat(chatPath)
+    fs.mkdirSync(path.dirname(docPath), { recursive: true })
+    backupDocument(docPath)
+    const tempPath = `${docPath}.tmp`
+    fs.writeFileSync(tempPath, String(content), 'utf8')
+    fs.renameSync(tempPath, docPath)
+    return { success: true, docPath }
+  } catch (err) {
+    log.error('Failed to write document:', err)
+    return { success: false, error: err.message }
+  }
+})
+
 ipcMain.handle('open-path', (event, filePath) => {
   if (filePath && fs.existsSync(filePath)) {
     openPath(filePath)
