@@ -1,6 +1,8 @@
 # PDF Annotator
 
 A PDF viewer and annotator with Markdown and LaTeX support, built with Electron and Vue 3.
+It is also a study chat: start a chat without a PDF, let the model search the web, and turn the
+conversation into a Quarto document.
 
 ## Features
 
@@ -27,6 +29,10 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - The document text is included automatically; select text or click a note to attach it as context
   - Multiple sessions per document, resizable panel, full-screen mode
   - Optional page images for vision-capable models
+  - Optional web search and page reading through Tavily
+- **Standalone chats** (`Ctrl+N`): a full-window chat without a PDF, saved as `untitled1.chat`, …
+  - `/generate [instructions]` writes a Quarto study document from the conversation
+  - `/open` shows the rendered document next to the chat; `/open run` also runs its code
 - **Keyboard Shortcuts**:
   - `Ctrl+B`: Bold
   - `Ctrl+I`: Italic
@@ -34,7 +40,8 @@ A PDF viewer and annotator with Markdown and LaTeX support, built with Electron 
   - `Ctrl+H`: Hide/show annotation
   - `Ctrl+S`: Save
   - `Ctrl+Shift+S`: Save As (copies the PDF and its annotations to a new name)
-  - `Ctrl+O`: Open file
+  - `Ctrl+O`: Open a PDF or a chat
+  - `Ctrl+N`: New chat
   - `Ctrl+\`: Toggle sidebar
   - `Ctrl+Shift+L`: Toggle chat
   - `Ctrl+L`: Add the current selection (PDF text, note or chat reply) to the chat
@@ -199,8 +206,51 @@ turned on for a session), the attached-context pages, or the page in view, are s
 JPEG images. Image support is read from the provider when available (OpenRouter, Ollama,
 LM Studio) and guessed from the model name otherwise; it can be overridden per model.
 
-**Storage.** Sessions are saved to `<name>.pdfchat` next to the PDF (separate from the
+**Storage.** PDF chat sessions are saved to `<name>.pdfchat` next to the PDF (separate from the
 `.pdfmark` annotations), and are copied along on *Save As*. Page images are not stored.
+
+## Standalone Chats, Web Search and Documents
+
+The welcome screen offers **Open PDF** and **New chat**, plus your recent PDFs and chats.
+
+**Standalone chats.** *New chat* (`Ctrl+N`) opens a full-window chat with its own tutor-style
+system prompt (editable in *Settings → Standalone Chats*). Chats are saved in the chats folder
+(default `Documents/PDF Annotator/Chats`) as `untitled1.chat`, `untitled2.chat`, … — the lowest
+number for which neither `untitledN.chat` nor `untitledN.qmd` exists. Nothing is written until the
+first message. *Save As* (`Ctrl+Shift+S` or the save button) copies the chat and its document under
+a new name and switches to the copy; if either target file exists you are asked first.
+
+**Web search.** With a Tavily API key (*Settings → Web Search*), the model can call `web_search`
+(Tavily `/search`) and `web_fetch` (Tavily `/extract`) while answering. The globe button in the chat
+box turns this on or off per session; it is on by default for standalone chats and off for PDF
+chats. Each reply shows the searches and pages it used. After the tool call limit (default 6) the
+model must answer with what it found, so every reply ends with a final answer. Web content is passed
+to the model as untrusted data. Models that reject tools answer without them.
+
+**Commands** (standalone chats; type `/` to see them):
+
+| Command | What it does |
+|---------|--------------|
+| `/generate [instructions]` | Writes `<chat name>.qmd` next to the chat from the visible conversation: key points, points of confusion, examples and visualizations. Run it again to update the document with newer parts of the conversation; the text after `/generate` steers it (`{{steer}}` in the instruction). The instruction is editable in *Settings → Documents*. |
+| `/open` | Renders the document with Quarto and shows it in a resizable pane beside the chat. Code cells are shown but not run. |
+| `/open run` | Same, but runs the code cells (after a confirmation listing them). Needs Jupyter for Python cells, R/knitr for R cells. |
+| `/close` | Hides the document. |
+
+The document only changes on `/generate`. Earlier versions are kept in `.versions/<name>/` in the
+chats folder (last 10). Commands are never sent to the model as chat messages.
+
+**Quarto is required for `/open`.** Install it from <https://quarto.org/docs/get-started/>. The app
+looks in the path set in *Settings → Documents*, your `PATH`, `~/.local/bin`, `/usr/local/bin`,
+`/opt/quarto/bin` and `~/opt/quarto-*/bin`. A user-local install without root:
+
+```bash
+curl -fsSLO https://github.com/quarto-dev/quarto-cli/releases/download/v1.11.9/quarto-1.11.9-linux-amd64.tar.gz
+mkdir -p ~/opt ~/.local/bin && tar -xzf quarto-1.11.9-linux-amd64.tar.gz -C ~/opt
+ln -sf ~/opt/quarto-1.11.9/bin/quarto ~/.local/bin/quarto
+```
+
+Documents are rendered to a single self-contained HTML file in the app's cache (math as MathML, so
+no network is needed) and shown in a sandboxed frame; links open in your browser.
 
 ## Auto-Save
 
@@ -213,13 +263,17 @@ The application auto-saves changes to a temporary file (`.pdfmark.tmp`) every 2 
 ```
 src/
 ├── main/           # Electron main process
-│   └── main.js     # Main entry point
+│   ├── main.js     # Main entry point, IPC, files
+│   ├── llm.js      # OpenAI-compatible client (streaming, tool calls)
+│   ├── agent.js    # Tool loop that always ends with a final answer
+│   ├── webTools.js # Tavily web_search / web_fetch
+│   └── quarto.js   # Find Quarto, render documents
 ├── renderer/       # Vue.js frontend
 │   ├── components/ # Vue components
 │   ├── store/      # Vuex store
 │   ├── utils/      # Utilities (markdown, etc.)
 │   └── styles/     # CSS styles
-└── common/         # Shared code
+└── common/         # Shared code (settings, providers, chat files, /generate helpers)
 
 app-build/          # Webpack output (generated)
 dist/               # electron-builder output (generated)
