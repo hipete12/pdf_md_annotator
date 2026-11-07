@@ -63,6 +63,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     userTemplate: DEFAULT_USER_TEMPLATE
   },
   chat: {
+    // Folder for standalone chats ('' = Documents/PDF Annotator/Chats)
+    chatsFolder: '',
     panelVisible: false,
     panelWidth: 420,
     // Attach rendered page images for vision-capable models
