@@ -163,6 +163,43 @@
     <h3 class="settings-section-title tools-subtitle">
       Documents
     </h3>
+    <div class="settings-row">
+      <label
+        class="settings-label"
+        for="tools-quarto-path"
+      >Quarto</label>
+      <div class="ai-inline">
+        <input
+          id="tools-quarto-path"
+          type="text"
+          class="settings-input ai-wide"
+          :value="quartoPath"
+          placeholder="Find automatically"
+          spellcheck="false"
+          @change="setQuartoPath($event.target.value.trim())"
+        >
+        <button
+          class="ai-link"
+          @click="checkQuarto"
+        >
+          Check
+        </button>
+      </div>
+    </div>
+    <p
+      class="settings-hint"
+      :class="{ 'ai-ok': quarto.found, 'ai-error': quarto.checked && !quarto.found }"
+    >
+      <template v-if="!quarto.checked">
+        Checking for Quarto…
+      </template>
+      <template v-else-if="quarto.found">
+        Quarto {{ quarto.version }} at {{ quarto.path }}
+      </template>
+      <template v-else>
+        Quarto was not found. /open needs it: install it from quarto.org, or enter the path to the quarto binary.
+      </template>
+    </p>
     <div class="settings-row-full">
       <div class="ai-template-head">
         <label
@@ -217,6 +254,22 @@ export default {
     const updateSetting = (path, value) => store.commit('SET_SETTING', { path, value })
     const clampInt = (value, min, max) => Math.min(max, Math.max(min, parseInt(value, 10) || min))
 
+    // Quarto (needed by /open)
+    const quarto = ref({ checked: false, found: false })
+    const quartoPath = computed(() => store.state.settings.quarto?.path || '')
+    const checkQuarto = async () => {
+      if (!ipcRenderer) return
+      quarto.value = { checked: false, found: false }
+      const status = await ipcRenderer.invoke('quarto:status', { refresh: true })
+      quarto.value = { checked: true, ...status }
+    }
+    // The main process reads quarto.path from the saved settings
+    const setQuartoPath = async (value) => {
+      updateSetting('quarto.path', value)
+      await store.dispatch('saveSettings')
+      checkQuarto()
+    }
+
     const keyDraft = ref('')
     const hasKey = ref(false)
     const keyMessage = ref({ text: '' })
@@ -224,6 +277,7 @@ export default {
 
     onMounted(async () => {
       if (!ipcRenderer) return
+      checkQuarto()
       const status = await ipcRenderer.invoke('llm:key-status')
       hasKey.value = Boolean(status?.keys?.tavily)
       if (!chat.value.chatsFolder) {
@@ -245,7 +299,7 @@ export default {
     const saveKey = () => keyDraft.value.trim() && setKey(keyDraft.value)
     const removeKey = () => setKey('')
 
-    return { defaults, llm, chat, tools, updateSetting, clampInt, keyDraft, hasKey, keyMessage, saveKey, removeKey, defaultFolder }
+    return { quarto, quartoPath, checkQuarto, setQuartoPath, defaults, llm, chat, tools, updateSetting, clampInt, keyDraft, hasKey, keyMessage, saveKey, removeKey, defaultFolder }
   }
 }
 </script>

@@ -10,8 +10,11 @@ const { LLM_PROVIDERS } = require('../common/llm')
 const {
   isPdfFile, isChatFile, chatBaseName, docPathFor, withChatExtension, nextUntitledName, CHAT_EXTENSION
 } = require('../common/chatFiles')
+const { codeCellLanguages } = require('../common/docGen')
 const { listModels } = require('./llm')
 const { runAgent } = require('./agent')
+const { findQuarto, renderDocument } = require('./quarto')
+const crypto = require('crypto')
 const { createSecrets } = require('./secrets')
 
 // Initialize store for settings. User settings live under the top-level keys
@@ -107,6 +110,14 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     openExternalIfSafe(url)
     return { action: 'deny' }
+  })
+  // The rendered document is shown in a sandboxed iframe: links in it must
+  // not navigate that frame to web pages; open them in the browser instead
+  mainWindow.webContents.on('will-frame-navigate', (details) => {
+    if (details.isMainFrame) return
+    if (/^(about|data|blob):/i.test(details.url)) return
+    details.preventDefault()
+    openExternalIfSafe(details.url)
   })
   mainWindow.webContents.on('will-navigate', (event, url) => {
     if (url === mainWindow.webContents.getURL()) return
@@ -756,6 +767,93 @@ ipcMain.handle('doc:write', (event, { chatPath, content }) => {
     log.error('Failed to write document:', err)
     return { success: false, error: err.message }
   }
+})
+
+// --- Quarto: render the chat's document for the viewer ----------------------
+
+ipcMain.handle('quarto:status', async (event, { refresh = false } = {}) => {
+  const found = await findQuarto(String(store.get('quarto.path') || '').trim(), { refresh })
+  return found ? { found: true, ...found } : { found: false }
+})
+
+let activeRender = null
+// Documents whose code the user agreed to run (content hashes, this run of the app)
+const approvedCode = new Set()
+
+async function confirmRunCode(content) {
+  const languages = codeCellLanguages(content)
+  if (languages.length === 0) return 'run'
+  const hash = crypto.createHash('sha256').update(content).digest('hex')
+  if (approvedCode.has(hash)) return 'run'
+  const counts = Object.entries(languages.reduce((acc, l) => ({ ...acc, [l]: (acc[l] || 0) + 1 }), {}))
+    .map(([lang, n]) => `${n} ${lang}`).join(', ')
+  const { response } = await dialog.showMessageBox(mainWindow, {
+    type: 'warning',
+    title: 'Run Code Cells?',
+    message: `Run ${languages.length} code cell${languages.length === 1 ? '' : 's'} (${counts})?`,
+    detail: 'The model wrote this code. Running it executes it on your computer with your permissions. ' +
+      'Read the document first and only run code you trust.',
+    buttons: ['Run Code', 'Show Without Running', 'Cancel'],
+    defaultId: 1,
+    cancelId: 2
+  })
+  if (response === 0) {
+    approvedCode.add(hash)
+    return 'run'
+  }
+  return response === 1 ? 'static' : 'cancel'
+}
+
+ipcMain.handle('doc:render', async (event, { chatPath, run = false }) => {
+  let docPath
+  try {
+    docPath = documentPathForChat(chatPath)
+  } catch (err) {
+    return { success: false, code: 'config', error: err.message }
+  }
+  if (!fs.existsSync(docPath)) {
+    return { success: false, code: 'no_document', error: 'There is no document for this chat yet. Use /generate first.' }
+  }
+  const quarto = await findQuarto(String(store.get('quarto.path') || '').trim())
+  if (!quarto) {
+    return {
+      success: false,
+      code: 'no_quarto',
+      error: 'Quarto was not found. Install it from https://quarto.org/docs/get-started/ or set its path in Settings → Documents.'
+    }
+  }
+  const content = fs.readFileSync(docPath, 'utf8')
+  let execute = Boolean(run)
+  if (execute) {
+    const choice = await confirmRunCode(content)
+    if (choice === 'cancel') return { success: false, code: 'cancelled', error: 'Cancelled' }
+    execute = choice === 'run'
+  }
+
+  activeRender?.abort()
+  const controller = new AbortController()
+  activeRender = controller
+  try {
+    const result = await renderDocument({
+      quartoPath: quarto.path,
+      version: quarto.version,
+      content,
+      run: execute,
+      cacheDir: path.join(app.getPath('userData'), 'quarto-renders'),
+      signal: controller.signal
+    })
+    return { success: true, html: result.html, cached: result.cached, run: execute, docName: path.basename(docPath), quartoVersion: quarto.version }
+  } catch (err) {
+    if (err.code !== 'cancelled') log.warn('Quarto render failed:', err.message)
+    return { success: false, code: err.code || 'render', error: err.message, log: err.log || '' }
+  } finally {
+    if (activeRender === controller) activeRender = null
+  }
+})
+
+ipcMain.handle('doc:render-cancel', () => {
+  activeRender?.abort()
+  return { cancelled: Boolean(activeRender) }
 })
 
 ipcMain.handle('open-path', (event, filePath) => {

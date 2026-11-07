@@ -81,6 +81,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Maximum tool calls per reply before the model must answer
     maxSteps: 6
   },
+  // Quarto renders the documents written by /generate ('' = find it)
+  quarto: {
+    path: ''
+  },
   chat: {
     // Folder for standalone chats ('' = Documents/PDF Annotator/Chats)
     chatsFolder: '',
