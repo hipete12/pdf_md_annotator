@@ -302,6 +302,23 @@
           @keydown="onComposerKeydown"
         />
         <button
+          v-if="hasModel && modelTools !== false"
+          class="chat-vision-toggle chat-web-toggle"
+          :class="{ on: webEnabled }"
+          :title="webTitle"
+          :aria-pressed="webEnabled"
+          @click="toggleWeb"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><circle
+            cx="8"
+            cy="8"
+            r="5.5"
+          /><path d="M2.5 8h11M8 2.5c-2 2.2-2 8.8 0 11M8 2.5c2 2.2 2 8.8 0 11" /></svg>
+        </button>
+        <button
           v-if="hasModel && modelVision !== false && !standalone"
           class="chat-vision-toggle"
           :class="{ on: imagesEnabled, unknown: modelVision === null }"
@@ -539,6 +556,13 @@ export default {
       return `Page images for this session. ${state}${unknown} Click to turn ${imagesEnabled.value ? 'off' : 'on'}.`
     })
     const toggleImages = () => store.dispatch('chat/setSessionVision', !imagesEnabled.value)
+
+    // Web tools (Tavily) for this session
+    const webEnabled = computed(() => store.getters['chat/webEnabled'])
+    const modelTools = computed(() => store.getters['chat/sessionModelInfo']?.tools ?? null)
+    const webTitle = computed(() => `Web search for this session: ${webEnabled.value ? 'on' : 'off'}. ` +
+      `${modelTools.value === null ? 'This model does not report tool support. ' : ''}Click to turn ${webEnabled.value ? 'off' : 'on'}.`)
+    const toggleWeb = () => store.dispatch('chat/setSessionWeb', !webEnabled.value)
 
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
       (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
@@ -784,6 +808,10 @@ export default {
     return {
       chatName,
       chatPath,
+      webEnabled,
+      modelTools,
+      webTitle,
+      toggleWeb,
       contextClass,
       contextKindLabel,
       contextLocation,

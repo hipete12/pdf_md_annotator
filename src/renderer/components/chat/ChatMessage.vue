@@ -133,6 +133,18 @@
     </template>
 
     <template v-else-if="message.role === 'assistant'">
+      <ChatToolSteps
+        v-if="message.steps && message.steps.length"
+        :steps="message.steps"
+        :pending="Boolean(message.pending) && !message.content"
+      />
+      <p
+        v-for="notice in message.notices || []"
+        :key="notice"
+        class="chat-message-notice"
+      >
+        {{ notice }}
+      </p>
       <details
         v-if="message.reasoning"
         class="chat-reasoning"
@@ -221,6 +233,7 @@ import { computed, ref } from 'vue'
 import { useStore } from 'vuex'
 import { renderMarkdown } from '../../utils/markdown'
 import ChatEditBox from './ChatEditBox.vue'
+import ChatToolSteps from './ChatToolSteps.vue'
 import { contextClass, contextKindLabel, contextLocation } from '../../utils/contextChips'
 
 let clipboard = null
@@ -233,7 +246,7 @@ try {
 export default {
   name: 'ChatMessage',
 
-  components: { ChatEditBox },
+  components: { ChatEditBox, ChatToolSteps },
 
   props: {
     message: { type: Object, required: true },
@@ -449,6 +462,13 @@ export default {
 @keyframes chat-bounce {
   0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
   40% { opacity: 1; transform: translateY(-3px); }
+}
+
+.chat-message-notice {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
 }
 
 .chat-reasoning {

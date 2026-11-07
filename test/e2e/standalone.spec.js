@@ -90,4 +90,50 @@ test.describe('Standalone chat', () => {
     expect(fs.readdirSync(path.join(chats, '.versions', 'physics'))).toHaveLength(1)
     await expect(window.locator('.chat-bubble')).toHaveText('Explain entropy')
   })
+
+  test('a reply can search the web and shows the steps and sources', async () => {
+    const http = require('http')
+    const tavily = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ results: [{ title: 'Second law of thermodynamics', url: 'https://example.org/second-law', content: 'Entropy never decreases.' }] }))
+    })
+    await new Promise(resolve => tavily.listen(0, '127.0.0.1', resolve))
+    await app.close()
+    fake.server.close()
+    fake = await startFakeLlm((body, i) => (i === 0
+      ? { content: 'Let me check.', toolCalls: [{ id: 'c1', name: 'web_search', arguments: { query: 'second law entropy' } }] }
+      : 'It never decreases in an isolated system ([source](https://example.org/second-law)).'))
+    process.env.PDF_ANNOTATOR_TAVILY_URL = `http://127.0.0.1:${tavily.address().port}`
+    try {
+      ;({ app, window, tempDir } = await launchWithSettings((dir) => {
+        chats = path.join(dir, 'chats')
+        return {
+          llm: { provider: 'custom', baseUrls: { custom: fake.baseUrl }, models: { custom: 'fake-model' } },
+          chat: { chatsFolder: chats }
+        }
+      }))
+      const stored = await window.evaluate(() => require('electron').ipcRenderer.invoke('llm:set-key', { providerId: 'tavily', apiKey: 'tvly-test' }))
+      expect(stored.success).toBe(true)
+
+      await window.getByRole('button', { name: /New chat/ }).click()
+      await expect(window.locator('.chat-web-toggle.on')).toBeVisible()
+      await window.fill('.chat-input', 'Can entropy decrease?')
+      await window.press('.chat-input', 'Enter')
+
+      await expect(window.locator('.chat-answer')).toContainText('never decreases in an isolated system')
+      await expect(window.locator('.chat-answer')).not.toContainText('Let me check')
+      const steps = window.locator('.tool-steps')
+      await expect(steps.locator('summary')).toHaveText('Used the web · 1 search')
+      await steps.locator('summary').click()
+      await expect(steps.locator('a', { hasText: 'Second law of thermodynamics' })).toBeVisible()
+      await window.screenshot({ path: path.join(__dirname, '../../test-results/web-tools.png') })
+
+      const second = fake.chatRequests()[1]
+      expect(second.messages.at(-1).role).toBe('tool')
+      expect(second.messages.at(-1).content).toContain('Entropy never decreases.')
+    } finally {
+      delete process.env.PDF_ANNOTATOR_TAVILY_URL
+      tavily.close()
+    }
+  })
 })

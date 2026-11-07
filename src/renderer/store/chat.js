@@ -51,6 +51,8 @@ export function sanitizeSessions(data) {
       modified: s.modified || s.created || now(),
       // null: follow the "Send page images" setting; true/false: per-session override
       visionEnabled: typeof s.visionEnabled === 'boolean' ? s.visionEnabled : null,
+      // null: follow the web tools default for this kind of chat
+      webEnabled: typeof s.webEnabled === 'boolean' ? s.webEnabled : null,
       // Model chosen for this session; null follows the default from Settings
       provider: typeof s.provider === 'string' && LLM_PROVIDERS[s.provider] ? s.provider : null,
       model: typeof s.model === 'string' && s.model ? s.model : null,
@@ -120,6 +122,14 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       isStandalone: (state) => state.target?.kind === 'standalone',
       // "untitled3" for a standalone chat
       chatName: (state) => (state.target?.kind === 'standalone' ? chatBaseName(state.target.path) : ''),
+      // Whether the next reply may use web search / fetch
+      webEnabled: (state, getters, rootState) => {
+        if (getters.sessionModelInfo?.tools === false) return false
+        const override = getters.activeSession?.webEnabled
+        if (typeof override === 'boolean') return override
+        const tools = rootState.settings.tools || {}
+        return Boolean(state.target?.kind === 'standalone' ? tools.webStandalone : tools.webPdf)
+      },
       sortedSessions: (state) => [...state.sessions].sort((a, b) => b.modified.localeCompare(a.modified)),
       isStreaming: (state) => Boolean(state.streaming)
     },
@@ -153,6 +163,28 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         if (!session) return
         session.provider = providerId || null
         session.model = providerId && model ? model : null
+      },
+      SET_SESSION_WEB(state, { id, value }) {
+        const session = findSession(state, id)
+        if (session) session.webEnabled = value
+      },
+      // Tool activity of a streaming reply: add or update a step by id
+      UPSERT_STEP(state, { sessionId, messageId, step }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (!message) return
+        const steps = message.steps || (message.steps = [])
+        const existing = steps.find(s => s.id === step.id)
+        if (existing) Object.assign(existing, step)
+        else steps.push({ ...step })
+      },
+      // Text streamed before tool calls was only a preamble: drop it
+      RESET_MESSAGE_CONTENT(state, { sessionId, messageId }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (message) message.content = ''
+      },
+      ADD_MESSAGE_NOTICE(state, { sessionId, messageId, notice }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (message && !(message.notices || []).includes(notice)) message.notices = [...(message.notices || []), notice]
       },
       SET_SESSION_VISION(state, { id, value }) {
         const session = findSession(state, id)
@@ -308,6 +340,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           created: now(),
           modified: now(),
           visionEnabled: null,
+          webEnabled: null,
           provider: null,
           model: null,
           rootActiveId: null,
@@ -374,6 +407,11 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const history = ancestorsOf(session, userMessageId)
 
         const llm = rootState.settings.llm
+        const webTools = getters.webEnabled
+        // Tool guidance goes after the (cache-friendly) system prompt
+        const withTools = (template) => (webTools && llm.toolsInstruction
+          ? `${template}\n\n${llm.toolsInstruction}`
+          : template)
         // The session's own model when chosen, else the Settings default
         const providerId = session.provider && session.model ? session.provider : llm.provider
         const model = session.provider && session.model ? session.model : (llm.models?.[llm.provider] || '')
@@ -403,7 +441,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         let messages
         if (state.target?.kind === 'standalone') {
           messages = buildRequestMessages({
-            systemTemplate: llm.standaloneSystemTemplate,
+            systemTemplate: withTools(llm.standaloneSystemTemplate),
             userTemplate: llm.userTemplate,
             title: chatBaseName(state.target.path),
             documentText: '',
@@ -458,7 +496,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           })
 
           messages = buildRequestMessages({
-            systemTemplate: llm.systemTemplate,
+            systemTemplate: withTools(llm.systemTemplate),
             userTemplate: llm.userTemplate,
             title: String(rootState.pdfPath || 'document').split(/[\\/]/).pop(),
             documentText: doc.text,
@@ -492,6 +530,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           model,
           messages,
           temperature: llm.temperature,
+          webTools,
           // Stable per conversation: providers such as OpenCode Go route and
           // cache prompts by it
           sessionId
@@ -549,6 +588,14 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const result = await ipcRenderer.invoke('llm:list-models', { providerId, baseUrl })
         if (result?.success) commit('SET_LLM_MODELS', { providerId, models: result.models }, { root: true })
         return result
+      },
+
+      // Turn web tools on/off for the active session
+      setSessionWeb({ commit, getters, dispatch }, value) {
+        const session = getters.activeSession
+        if (!session) return
+        commit('SET_SESSION_WEB', { id: session.id, value })
+        if (session.messages.length) return dispatch('persist')
       },
 
       // Turn page images on/off for the active session
@@ -708,6 +755,17 @@ export function createChatPlugin({ ipcRenderer, flushDelayMs = 30 }) {
       buffer.content += content || ''
       buffer.reasoning += reasoning || ''
       if (!timer) timer = setTimeout(flush, flushDelayMs)
+    })
+
+    // Tool steps, preamble resets and notices from the agent loop
+    ipcRenderer.on('llm:chat-activity', (event, { requestId, type, step, message }) => {
+      const streaming = store.state.chat.streaming
+      if (!streaming || requestId !== streaming.requestId) return
+      flush()
+      const target = { sessionId: streaming.sessionId, messageId: streaming.messageId }
+      if (type === 'step') store.commit('chat/UPSERT_STEP', { ...target, step })
+      else if (type === 'reset') store.commit('chat/RESET_MESSAGE_CONTENT', target)
+      else if (type === 'notice') store.commit('chat/ADD_MESSAGE_NOTICE', { ...target, notice: message })
     })
 
     ipcRenderer.on('llm:chat-done', (event, { requestId, ...result }) => {

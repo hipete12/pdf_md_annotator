@@ -580,7 +580,12 @@ ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model
     messages,
     webTools: Boolean(webTools && tavilyKey),
     maxSteps: Math.min(20, Math.max(1, parseInt(store.get('tools.maxSteps'), 10) || 6)),
-    toolOptions: { apiKey: tavilyKey },
+    // E2E tests point the tools at a local fake Tavily server
+    // (NODE_ENV is replaced at build time, so a dedicated variable is used)
+    toolOptions: {
+      apiKey: tavilyKey,
+      ...(process.env.PDF_ANNOTATOR_TAVILY_URL ? { baseUrl: process.env.PDF_ANNOTATOR_TAVILY_URL } : {})
+    },
     onEvent: (e) => {
       if (e.type === 'delta') send('llm:chat-delta', { content: e.content, reasoning: e.reasoning })
       else send('llm:chat-activity', e)

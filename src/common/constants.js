@@ -2,7 +2,9 @@
  * Shared constants and utilities used by both main and renderer processes
  */
 
-import { DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS } from './llm'
+import {
+  DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, DEFAULT_TOOLS_INSTRUCTION, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS
+} from './llm'
 
 // .pdfmark file format version
 export const PDFMARK_VERSION = '1.0.0'
@@ -62,7 +64,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
     // System prompt for standalone chats (no PDF)
     standaloneSystemTemplate: DEFAULT_STANDALONE_SYSTEM_TEMPLATE,
-    userTemplate: DEFAULT_USER_TEMPLATE
+    userTemplate: DEFAULT_USER_TEMPLATE,
+    // Appended to the system prompt when web tools are on
+    toolsInstruction: DEFAULT_TOOLS_INSTRUCTION
   },
   // Web tools (Tavily) the model can call during a chat. The Tavily API key
   // is stored with the other keys (secrets.js, id "tavily").

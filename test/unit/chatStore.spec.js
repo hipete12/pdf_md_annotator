@@ -546,3 +546,50 @@ describe('Standalone chats', () => {
     expect(chat(store).target).to.equal(null)
   })
 })
+
+describe('Web tools in the chat store', () => {
+  it('defaults by chat kind, can be toggled per session and is sent with the request', async () => {
+    const { store, ipc } = await setup()
+    expect(store.getters['chat/webEnabled']).to.equal(false) // PDF chats: off by default
+    await store.dispatch('chat/newSession')
+    await store.dispatch('chat/setSessionWeb', true)
+    expect(store.getters['chat/webEnabled']).to.equal(true)
+    await store.dispatch('chat/sendMessage', { text: 'Latest results?' })
+    const start = ipc.lastCall('llm:chat-start').payload
+    expect(start.webTools).to.equal(true)
+    expect(start.messages[0].content).to.contain('web_search')
+
+    await store.dispatch('openStandaloneChat', { chatPath: '/chats/untitled1.chat', data: null })
+    expect(store.getters['chat/webEnabled']).to.equal(true) // standalone: on by default
+    store.commit('SET_SETTING', { path: 'tools.webStandalone', value: false })
+    expect(store.getters['chat/webEnabled']).to.equal(false)
+  })
+
+  it('is off for models known not to support tools', async () => {
+    const { store } = await setup()
+    await store.dispatch('chat/setSessionWeb', true)
+    store.commit('SET_LLM_MODELS', { providerId: 'custom', models: [{ id: 'test-model', tools: false }] })
+    expect(store.getters['chat/webEnabled']).to.equal(false)
+  })
+
+  it('records tool steps, drops preamble text and keeps notices', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/sendMessage', { text: 'Find it' })
+    const { requestId } = ipc.lastCall('llm:chat-start').payload
+    ipc.emit('llm:chat-delta', { requestId, content: 'Let me search. ' })
+    ipc.emit('llm:chat-activity', { requestId, type: 'reset' })
+    ipc.emit('llm:chat-activity', { requestId, type: 'step', step: { id: 'c1', type: 'search', query: 'q', status: 'running' } })
+    ipc.emit('llm:chat-activity', { requestId, type: 'step', step: { id: 'c1', type: 'search', query: 'q', status: 'done', results: [{ title: 'T', url: 'https://t' }] } })
+    ipc.emit('llm:chat-activity', { requestId: 'stale', type: 'notice', message: 'ignored' })
+    ipc.emit('llm:chat-activity', { requestId, type: 'notice', message: 'Web search is off: add a Tavily API key' })
+    ipc.emit('llm:chat-delta', { requestId, content: 'Answer.' })
+    ipc.emit('llm:chat-done', { requestId })
+    await tick(50)
+    const reply = store.getters['chat/activeMessages'][1]
+    expect(reply.content).to.equal('Answer.')
+    expect(reply.steps).to.deep.equal([{ id: 'c1', type: 'search', query: 'q', status: 'done', results: [{ title: 'T', url: 'https://t' }] }])
+    expect(reply.notices).to.deep.equal(['Web search is off: add a Tavily API key'])
+    const saved = ipc.lastCall('chat:save').payload.data.sessions[0].messages[1]
+    expect(saved.steps).to.have.length(1)
+  })
+})
