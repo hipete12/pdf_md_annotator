@@ -6,6 +6,7 @@
 import { marked } from 'marked'
 import katex from 'katex'
 import Prism from 'prismjs'
+import createDOMPurify from 'dompurify'
 
 // Import Prism languages (like MarkText does)
 import 'prismjs/components/prism-javascript'
@@ -18,6 +19,8 @@ import 'prismjs/components/prism-csharp'
 import 'prismjs/components/prism-go'
 import 'prismjs/components/prism-rust'
 import 'prismjs/components/prism-ruby'
+// php hooks into every highlight call and needs markup-templating loaded first
+import 'prismjs/components/prism-markup-templating'
 import 'prismjs/components/prism-php'
 import 'prismjs/components/prism-sql'
 import 'prismjs/components/prism-bash'
@@ -33,6 +36,49 @@ import 'prismjs/components/prism-latex'
 // Cache for rendered math to improve performance (like MarkText)
 const mathCache = new Map()
 
+// Markdown can come from untrusted sources (shared .pdfmark files, LLM output
+// steered by PDF contents) and the renderer has Node integration, so KaTeX may
+// only emit links, and only to safe protocols. Everything else (\htmlClass,
+// \includegraphics, javascript: URLs, ...) is rejected.
+const SAFE_LINK_PROTOCOLS = new Set(['http', 'https', 'mailto'])
+
+function isTrustedKatexCommand(context) {
+  if (context.command !== '\\href' && context.command !== '\\url') return false
+  return SAFE_LINK_PROTOCOLS.has(context.protocol)
+}
+
+// DOMPurify needs a window; create it lazily so importing this module never
+// fails in environments without a DOM.
+let purifier = null
+
+function getPurifier() {
+  if (!purifier) {
+    purifier = createDOMPurify(window)
+    // Force links to open outside the app window (see main process
+    // setWindowOpenHandler) and drop referrer information.
+    purifier.addHook('afterSanitizeAttributes', (node) => {
+      if (node.tagName === 'A' && node.hasAttribute('href')) {
+        node.setAttribute('target', '_blank')
+        node.setAttribute('rel', 'noopener noreferrer')
+      }
+    })
+  }
+  return purifier
+}
+
+/**
+ * Remove scripts, event handlers, javascript: URLs etc. from rendered HTML
+ * @param {string} html
+ * @returns {string}
+ */
+export function sanitizeHtml(html) {
+  return getPurifier().sanitize(html, {
+    USE_PROFILES: { html: true, svg: true, mathMl: true },
+    ADD_ATTR: ['target'],
+    FORBID_TAGS: ['style', 'form', 'input', 'button', 'textarea', 'select', 'iframe', 'object', 'embed']
+  })
+}
+
 /**
  * Render LaTeX math expression
  * @param {string} math - The LaTeX expression
@@ -40,7 +86,7 @@ const mathCache = new Map()
  * @param {object} macros - Custom LaTeX macros
  * @returns {string} - Rendered HTML or error message
  */
-function renderMath(math, displayMode = false, macros = {}) {
+export function renderMath(math, displayMode = false, macros = {}) {
   const cacheKey = `${math}_${displayMode}_${JSON.stringify(macros)}`
   
   if (mathCache.has(cacheKey)) {
@@ -52,13 +98,16 @@ function renderMath(math, displayMode = false, macros = {}) {
       displayMode,
       throwOnError: false,
       macros,
-      trust: true,
+      trust: isTrustedKatexCommand,
       strict: false
     })
     
-    const result = displayMode 
-      ? `<div class="math-block">${html}</div>`
-      : `<span class="math-inline">${html}</span>`
+    // data-tex keeps the source so copied/quoted selections can use TeX
+    // instead of the rendered glyphs (DOMPurify drops KaTeX's <annotation>)
+    const tex = escapeHtml(math)
+    const result = displayMode
+      ? `<div class="math-block" data-tex="${tex}">${html}</div>`
+      : `<span class="math-inline" data-tex="${tex}">${html}</span>`
     
     mathCache.set(cacheKey, result)
     return result
@@ -80,25 +129,6 @@ function escapeHtml(text) {
     "'": '&#039;'
   }
   return text.replace(/[&<>"']/g, m => map[m])
-}
-
-/**
- * Process LaTeX in text
- * Handles both inline ($...$) and display ($$...$$) math
- */
-function processLatex(text, macros = {}) {
-  // First, handle display math ($$...$$)
-  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => {
-    return renderMath(math.trim(), true, macros)
-  })
-  
-  // Then handle inline math ($...$)
-  // Be careful not to match escaped dollar signs or currency
-  text = text.replace(/(?<!\\)\$(?!\$)(.+?)(?<!\\)\$/g, (match, math) => {
-    return renderMath(math.trim(), false, macros)
-  })
-  
-  return text
 }
 
 /**
@@ -150,55 +180,67 @@ marked.setOptions({
   xhtml: false
 })
 
+const PLACEHOLDER = '\x00'
+const placeholder = (kind, index) => `${PLACEHOLDER}${kind}${index}${PLACEHOLDER}`
+const placeholderPattern = (kind) => new RegExp(`${PLACEHOLDER}${kind}(\\d+)${PLACEHOLDER}`, 'g')
+
 /**
- * Main markdown rendering function
+ * Main markdown rendering function. The returned HTML is sanitized.
  * @param {string} text - Raw markdown text
  * @param {object} options - Rendering options
- * @returns {string} - Rendered HTML
+ * @param {object} [options.latexMacros] - Custom LaTeX macros
+ * @returns {string} - Rendered, sanitized HTML
  */
 export function renderMarkdown(text, options = {}) {
   if (!text) return ''
   
   const { latexMacros = {} } = options
-  
-  // Step 1: Extract LaTeX BEFORE markdown processing to protect from escaping
+  const codeBlocks = []
   const mathBlocks = []
-  const DISPLAY_PLACEHOLDER = '\x00DISPLAY_MATH_'
-  const INLINE_PLACEHOLDER = '\x00INLINE_MATH_'
   
-  // Extract display math ($$...$$) first
-  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => {
-    const index = mathBlocks.length
-    mathBlocks.push({ math: math.trim(), display: true })
-    return DISPLAY_PLACEHOLDER + index + '\x00'
+  // Step 1: Protect code (fenced blocks, then inline spans) so "$" or "\(" in
+  // code is never treated as math. Restored verbatim before markdown parsing.
+  text = text.replace(/^([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1\2[ \t]*$/gm, (match) => {
+    codeBlocks.push(match)
+    return placeholder('C', codeBlocks.length - 1)
+  })
+  text = text.replace(/(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g, (match) => {
+    codeBlocks.push(match)
+    return placeholder('C', codeBlocks.length - 1)
   })
   
-  // Extract inline math ($...$)
+  // Step 2: Extract LaTeX BEFORE markdown processing to protect it from
+  // markdown escaping (e.g. "\[" would otherwise become "[").
+  const addMath = (math, display) => {
+    mathBlocks.push({ math: math.trim(), display })
+    return placeholder(display ? 'D' : 'I', mathBlocks.length - 1)
+  }
+  // Display math: $$...$$ and \[...\]
+  text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => addMath(math, true))
+  text = text.replace(/\\\[([\s\S]+?)\\\]/g, (match, math) => addMath(math, true))
+  // Inline math: \(...\) and $...$ (skipping currency like "$5 and $10")
+  text = text.replace(/\\\(([\s\S]+?)\\\)/g, (match, math) => addMath(math, false))
   text = text.replace(/\$([^$\n]+?)\$/g, (match, math) => {
-    // Skip if it looks like currency (number after $)
     if (/^\d/.test(math.trim())) return match
-    const index = mathBlocks.length
-    mathBlocks.push({ math: math.trim(), display: false })
-    return INLINE_PLACEHOLDER + index + '\x00'
+    return addMath(math, false)
   })
   
-  // Step 2: Parse markdown
+  // Step 3: Restore code and parse markdown
+  text = text.replace(placeholderPattern('C'), (match, index) => codeBlocks[parseInt(index)])
   let html = marked.parse(text)
   
-  // Step 3: Replace placeholders with rendered LaTeX
-  // Handle display math placeholders (may have <p>, <br> tags wrapped around)
-  html = html.replace(new RegExp(`(?:<p>)?${DISPLAY_PLACEHOLDER.replace('\x00', '\\x00')}(\\d+)\\x00(?:<\\/p>)?`, 'g'), (match, index) => {
+  // Step 4: Replace placeholders with rendered LaTeX. Display math may have
+  // been wrapped in a paragraph by marked.
+  html = html.replace(new RegExp(`(?:<p>)?${placeholderPattern('D').source}(?:<\\/p>)?`, 'g'), (match, index) => {
     const block = mathBlocks[parseInt(index)]
     return renderMath(block.math, true, latexMacros)
   })
-  
-  // Handle inline math placeholders
-  html = html.replace(new RegExp(`${INLINE_PLACEHOLDER.replace('\x00', '\\x00')}(\\d+)\\x00`, 'g'), (match, index) => {
+  html = html.replace(placeholderPattern('I'), (match, index) => {
     const block = mathBlocks[parseInt(index)]
     return renderMath(block.math, false, latexMacros)
   })
   
-  return html
+  return sanitizeHtml(html)
 }
 
 /**
@@ -243,6 +285,7 @@ export async function loadLanguage(lang) {
 export default {
   renderMarkdown,
   renderMath,
+  sanitizeHtml,
   clearMathCache,
   getAvailableLanguages,
   isLanguageSupported,

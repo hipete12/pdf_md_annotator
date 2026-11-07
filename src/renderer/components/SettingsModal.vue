@@ -211,6 +211,9 @@
           </div>
         </div>
         
+        <!-- AI chat (provider, model, vision, prompt templates) -->
+        <AiChatSettings />
+        
         <!-- UI Settings -->
         <div class="settings-section">
           <h3 class="settings-section-title">UI Settings</h3>
@@ -256,9 +259,13 @@
 <script>
 import { ref, computed } from 'vue'
 import { useStore } from 'vuex'
+import { createDefaultSettings } from '../../common/constants'
+import AiChatSettings from './AiChatSettings.vue'
 
 export default {
   name: 'SettingsModal',
+  
+  components: { AiChatSettings },
   
   emits: ['close'],
   
@@ -303,40 +310,7 @@ export default {
     }
     
     const resetToDefaults = () => {
-      const defaults = {
-        markdown: {
-          fontSize: 14,
-          lineHeight: 1.6,
-          fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          listMargin: 0.5,
-          listItemMargin: 0.25
-        },
-        annotationBox: {
-          defaultWidth: 300,
-          defaultHeight: 200,
-          minWidth: 100,
-          minHeight: 50,
-          padding: 4
-        },
-        latex: {
-          macros: {},
-          throwOnError: false
-        },
-        shortcuts: {
-          bold: 'Ctrl+B',
-          italic: 'Ctrl+I',
-          underline: 'Ctrl+U',
-          save: 'Ctrl+S',
-          hideAnnotation: 'Ctrl+H'
-        },
-        ui: {
-          sidebarWidth: 200,
-          sidebarVisible: true,
-          theme: 'light'
-        }
-      }
-      
-      store.commit('SET_SETTINGS', defaults)
+      store.commit('SET_SETTINGS', createDefaultSettings())
     }
     
     const saveAndClose = async () => {

@@ -13,7 +13,7 @@ function startRenderer() {
     
     const server = new WebpackDevServer({
       static: {
-        directory: path.join(__dirname, '../dist/renderer')
+        directory: path.join(__dirname, '../app-build/renderer')
       },
       port: 9080,
       hot: true
@@ -61,7 +61,7 @@ function startElectron() {
   
   electronProcess = spawn(electronPath, [
     '--inspect=5858',
-    path.join(__dirname, '../dist/main/main.js'),
+    path.join(__dirname, '../app-build/main/main.js'),
     '--dev'
   ], {
     stdio: 'inherit',

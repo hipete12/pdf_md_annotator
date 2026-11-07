@@ -27,10 +27,12 @@
       <!-- Toolbar -->
       <Toolbar 
         v-if="pdfDocument"
+        :chat-open="chatVisible"
         @zoom-in="zoomIn"
         @zoom-out="zoomOut"
         @zoom-reset="zoomReset"
         @open-settings="openSettings"
+        @toggle-chat="toggleChat"
       />
       
       <!-- PDF Viewer -->
@@ -46,6 +48,13 @@
       />
     </div>
     
+    <!-- Chat (right side, resizable; can go full screen) -->
+    <ChatPanel
+      v-if="pdfDocument && chatVisible"
+      @close="toggleChat"
+      @open-settings="openSettings"
+    />
+    
     <!-- Settings Modal -->
     <SettingsModal 
       v-if="settingsModalOpen"
@@ -55,7 +64,7 @@
 </template>
 
 <script>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useStore } from 'vuex'
 import * as pdfjsLib from 'pdfjs-dist'
 import Sidebar from './components/Sidebar.vue'
@@ -63,6 +72,7 @@ import Toolbar from './components/Toolbar.vue'
 import PdfViewer from './components/PdfViewer.vue'
 import WelcomeScreen from './components/WelcomeScreen.vue'
 import SettingsModal from './components/SettingsModal.vue'
+import ChatPanel from './components/chat/ChatPanel.vue'
 
 // Safely get ipcRenderer
 let ipcRenderer = null
@@ -72,19 +82,11 @@ try {
   console.warn('Running outside Electron context')
 }
 
+const path = require('path')
+
 // Configure PDF.js worker path
 if (typeof window !== 'undefined') {
-  const isDev = process.env.NODE_ENV === 'development'
-  if (isDev) {
-    // Development: use node_modules path
-    pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-      'pdfjs-dist/build/pdf.worker.min.mjs',
-      import.meta.url
-    ).toString()
-  } else {
-    // Production: worker is bundled in resources
-    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs'
-  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc = './pdf.worker.min.mjs'
 }
 
 // Configure PDF.js to handle rendering errors gracefully
@@ -106,7 +108,8 @@ export default {
     Toolbar,
     PdfViewer,
     WelcomeScreen,
-    SettingsModal
+    SettingsModal,
+    ChatPanel
   },
   
   setup() {
@@ -116,16 +119,28 @@ export default {
     // Track the in-flight PDF loading task so it can be cancelled if the user
     // opens another PDF before the current one finishes loading.
     let currentLoadingTask = null
+
+    // PDF-only select-all mode used to keep copied text free of annotations.
+    let pdfSelectAllActive = false
+    let pdfSelectAllText = ''
     
     // Computed properties
     const pdfDocument = computed(() => store.state.pdfDocument)
     const sidebarVisible = computed(() => store.state.sidebarVisible)
     const settingsModalOpen = computed(() => store.state.settingsModalOpen)
     const settings = computed(() => store.state.settings)
+    const chatVisible = computed(() => Boolean(store.state.settings.chat?.panelVisible))
     
     // Methods
     const toggleSidebar = () => {
       store.commit('SET_SIDEBAR_VISIBLE', !sidebarVisible.value)
+    }
+    
+    const toggleChat = () => {
+      const visible = !chatVisible.value
+      store.commit('SET_SETTING', { path: 'chat.panelVisible', value: visible })
+      if (!visible) store.dispatch('chat/setFullscreen', false)
+      store.dispatch('saveSettings')
     }
     
     const zoomIn = () => {
@@ -155,6 +170,7 @@ export default {
     
     const loadPdf = async (filePath, annotations) => {
       if (!ipcRenderer) return
+      let loadingTask = null
       try {
         // If a previous load is still in flight, cancel/destroy it before starting a new one
         if (currentLoadingTask) {
@@ -180,7 +196,7 @@ export default {
         console.log('Uint8Array created, length:', uint8Array.length)
         
         // Load PDF with error handling options
-        const loadingTask = pdfjsLib.getDocument({
+        loadingTask = pdfjsLib.getDocument({
           data: uint8Array,
           verbosity: 0, // Suppress non-critical warnings
           standardFontDataUrl: null,
@@ -256,6 +272,10 @@ export default {
       store.dispatch('savePdfmark', { commit: true })
     }
     
+    const handleSaveFileAs = () => {
+      store.dispatch('savePdfmarkAs')
+    }
+    
     const handleToggleSidebar = () => {
       toggleSidebar()
     }
@@ -264,6 +284,19 @@ export default {
     const handleZoomOut = () => zoomOut()
     const handleZoomReset = () => zoomReset()
     const handleOpenSettings = () => openSettings()
+    const handleToggleChat = () => {
+      if (pdfDocument.value) toggleChat()
+    }
+    // Ctrl+L: attach the current selection (PDF text, reply or selected note)
+    // to the next chat message, opening the chat first if needed
+    const handleAttachSelection = async () => {
+      if (!pdfDocument.value) return
+      if (!chatVisible.value) {
+        toggleChat()
+        await nextTick()
+      }
+      window.dispatchEvent(new Event('chat:attach-selection'))
+    }
     
     // Lifecycle
     onMounted(() => {
@@ -274,32 +307,165 @@ export default {
       if (ipcRenderer) {
         ipcRenderer.on('open-pdf', handleOpenPdf)
         ipcRenderer.on('save-file', handleSaveFile)
+        ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
         ipcRenderer.on('zoom-in', handleZoomIn)
         ipcRenderer.on('zoom-out', handleZoomOut)
         ipcRenderer.on('zoom-reset', handleZoomReset)
         ipcRenderer.on('open-settings', handleOpenSettings)
+        ipcRenderer.on('toggle-chat', handleToggleChat)
+        ipcRenderer.on('chat-attach-selection', handleAttachSelection)
       }
       
       // Global keyboard shortcuts
       window.addEventListener('keydown', handleGlobalKeydown)
+
+      // Clean PDF-only copy handling for Ctrl+A selections
+      document.addEventListener('copy', handlePdfSelectAllCopy)
+      document.addEventListener('mousedown', clearPdfSelectAllMode, true)
+      document.addEventListener('selectionchange', handlePdfSelectionChange)
     })
     
     onUnmounted(() => {
       if (ipcRenderer) {
         ipcRenderer.removeListener('open-pdf', handleOpenPdf)
         ipcRenderer.removeListener('save-file', handleSaveFile)
+        ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
         ipcRenderer.removeListener('zoom-in', handleZoomIn)
         ipcRenderer.removeListener('zoom-out', handleZoomOut)
         ipcRenderer.removeListener('zoom-reset', handleZoomReset)
         ipcRenderer.removeListener('open-settings', handleOpenSettings)
+        ipcRenderer.removeListener('toggle-chat', handleToggleChat)
+        ipcRenderer.removeListener('chat-attach-selection', handleAttachSelection)
       }
       
       window.removeEventListener('keydown', handleGlobalKeydown)
+      document.removeEventListener('copy', handlePdfSelectAllCopy)
+      document.removeEventListener('mousedown', clearPdfSelectAllMode, true)
+      document.removeEventListener('selectionchange', handlePdfSelectionChange)
     })
     
+    const getElementTarget = (target) => {
+      if (!target) return null
+      if (target.nodeType === Node.ELEMENT_NODE) return target
+      return target.parentElement || null
+    }
+
+    const isTextEntryTarget = (target) => {
+      const element = getElementTarget(target)
+      if (!element || typeof element.closest !== 'function') return false
+      return Boolean(element.closest(
+        'textarea, input, select, [contenteditable]:not([contenteditable="false"])'
+      ))
+    }
+
+    const clearPdfSelectAllMode = () => {
+      pdfSelectAllActive = false
+      pdfSelectAllText = ''
+      document.querySelector('.pdf-pages-container')
+        ?.classList.remove('pdf-select-all-mode')
+    }
+
+    const selectAllPdfText = () => {
+      const selection = window.getSelection()
+      if (!selection) return false
+
+      const annotationLayers = Array.from(
+        document.querySelectorAll('.pdf-pages-container .annotation-layer')
+      )
+      const previousDisplays = annotationLayers.map(layer => layer.style.display)
+      let text = ''
+
+      try {
+        // Hide annotation overlays so their text/emoji cannot enter the Range.
+        for (const layer of annotationLayers) {
+          layer.style.display = 'none'
+        }
+
+        const layers = document.querySelectorAll('.pdf-pages-container .textLayer')
+        let firstNode = null
+        let lastNode = null
+
+        for (const layer of layers) {
+          const walker = document.createTreeWalker(
+            layer,
+            NodeFilter.SHOW_TEXT,
+            {
+              acceptNode(node) {
+                return node.nodeValue && node.nodeValue.length > 0
+                  ? NodeFilter.FILTER_ACCEPT
+                  : NodeFilter.FILTER_REJECT
+              }
+            }
+          )
+          let node = walker.nextNode()
+          while (node) {
+            if (!firstNode) firstNode = node
+            lastNode = node
+            node = walker.nextNode()
+          }
+        }
+
+        if (!firstNode || !lastNode) return false
+
+        const range = document.createRange()
+        range.setStart(firstNode, 0)
+        range.setEnd(lastNode, lastNode.nodeValue.length)
+        selection.removeAllRanges()
+        selection.addRange(range)
+        text = selection.toString()
+      } finally {
+        annotationLayers.forEach((layer, index) => {
+          layer.style.display = previousDisplays[index]
+        })
+      }
+
+      document.querySelector('.pdf-pages-container')
+        ?.classList.add('pdf-select-all-mode')
+      pdfSelectAllActive = true
+      pdfSelectAllText = text
+      return true
+    }
+
+    const handlePdfSelectAllCopy = (event) => {
+      if (!pdfSelectAllActive || !pdfSelectAllText) return
+      if (!event.clipboardData) return
+      event.clipboardData.setData('text/plain', pdfSelectAllText)
+      event.preventDefault()
+    }
+
+    const handlePdfSelectionChange = () => {
+      if (!pdfSelectAllActive) return
+      const selection = window.getSelection()
+      if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+        clearPdfSelectAllMode()
+      }
+    }
+
     const handleGlobalKeydown = (e) => {
+      // Esc leaves full-screen chat (unless a modal is open on top of it)
+      if (e.key === 'Escape' && !e.defaultPrevented && store.state.chat.fullscreen && !settingsModalOpen.value) {
+        e.preventDefault()
+        store.dispatch('chat/setFullscreen', false)
+        return
+      }
+
+      // Ctrl+A / Cmd+A selects only the rendered PDF text, unless focus is in
+      // a native text field where select-all should behave normally.
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        if (!isTextEntryTarget(e.target) && selectAllPdfText()) {
+          e.preventDefault()
+        }
+        return
+      }
+
+      // Ctrl+, to open settings
+      if (e.ctrlKey && e.key === ',') {
+        e.preventDefault()
+        openSettings()
+      }
+
       // Ctrl+S to save
       if (e.ctrlKey && e.key === 's') {
         e.preventDefault()
@@ -366,6 +532,9 @@ export default {
     
     const handleConcatenatePdf = async (droppedPdfPath) => {
       if (!ipcRenderer) return
+
+      const currentPdfPath = store.state.pdfPath
+      if (!currentPdfPath) return
       
       try {
         // Show dialog asking where to concatenate
@@ -376,12 +545,10 @@ export default {
         if (result === 'cancel') return
         
         const position = result // 'beginning' or 'end'
-        const currentPdfPath = store.state.pdfPath
-        
-        // Get the directory of the current PDF
-        const currentDir = currentPdfPath.substring(0, currentPdfPath.lastIndexOf('\\'))
-        const droppedFileName = droppedPdfPath.split(/[\\/]/).pop()
-        const targetPath = `${currentDir}\\${droppedFileName}`
+        const targetPath = path.join(
+          path.dirname(currentPdfPath),
+          path.basename(droppedPdfPath)
+        )
         
         // Copy the dropped PDF to the same folder (with overwrite confirmation)
         const copyResult = await ipcRenderer.invoke('copy-pdf-file', {
@@ -394,11 +561,12 @@ export default {
           return
         }
         
-        // Get page count of the dropped PDF
-        const pageCount = await ipcRenderer.invoke('get-pdf-page-count', targetPath)
-        
         // Load the dropped PDF
         const buffer = await ipcRenderer.invoke('read-pdf-file', targetPath)
+        if (!buffer) {
+          console.error('Failed to read dropped PDF:', targetPath)
+          return
+        }
         const uint8Array = new Uint8Array(buffer)
         const loadingTask = pdfjsLib.getDocument({
           data: uint8Array,
@@ -409,16 +577,16 @@ export default {
         })
         const droppedPdf = await loadingTask.promise
         
-        // Add to store
+        // Add to store (page count comes from PDF.js, which parses the file
+        // properly, including page objects inside compressed object streams)
         store.commit('ADD_CONCATENATED_PDF', {
           position,
           pdfPath: targetPath,
-          pageCount,
+          pageCount: droppedPdf.numPages,
           document: droppedPdf
         })
         
-        // Mark as dirty and save
-        store.commit('MARK_DIRTY')
+        // Save the updated annotation data
         store.dispatch('savePdfmark', { commit: true })
         
       } catch (err) {
@@ -439,7 +607,9 @@ export default {
       openSettings,
       closeSettings,
       openFile,
-      handleDrop
+      handleDrop,
+      chatVisible,
+      toggleChat
     }
   }
 }

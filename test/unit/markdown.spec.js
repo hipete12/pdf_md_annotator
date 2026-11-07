@@ -2,7 +2,7 @@
  * Unit tests for Markdown rendering utility
  */
 
-import { renderMarkdown, renderMath, clearMathCache } from '../../src/renderer/utils/markdown'
+import { renderMarkdown, renderMath, clearMathCache, sanitizeHtml } from '../../src/renderer/utils/markdown'
 
 describe('Markdown Rendering', () => {
   beforeEach(() => {
@@ -111,6 +111,13 @@ describe('Markdown Rendering', () => {
       expect(result).to.include('language-python')
     })
 
+    it('should actually produce Prism token markup', () => {
+      for (const lang of ['javascript', 'python', 'php', 'bash']) {
+        const result = renderMarkdown('```' + lang + '\nif (x) { return 1 }\n```')
+        expect(result, lang).to.include('class="token')
+      }
+    })
+
     it('should highlight TypeScript code', () => {
       const input = '```typescript\nconst x: number = 1;\n```'
       const result = renderMarkdown(input)
@@ -155,7 +162,8 @@ describe('Markdown Rendering', () => {
 
     it('should show error for invalid LaTeX', () => {
       const result = renderMarkdown('$\\invalidcommand$')
-      expect(result).to.include('math-error').or.include('katex')
+      // KaTeX (throwOnError: false) renders unknown commands in its error colour
+      expect(result).to.include('#cc0000')
     })
 
     it('should handle multiple math expressions', () => {
@@ -231,6 +239,104 @@ describe('Markdown Rendering', () => {
     it('should preserve line breaks', () => {
       const result = renderMarkdown('line 1\nline 2')
       expect(result).to.include('<br')
+    })
+  })
+
+  describe('Alternative math delimiters', () => {
+    it('renders \\(...\\) as inline math', () => {
+      const result = renderMarkdown('The value \\(x^2\\) grows')
+      expect(result).to.include('math-inline')
+      expect(result).to.not.include('\\(')
+    })
+
+    it('renders \\[...\\] as display math', () => {
+      const result = renderMarkdown('Equation:\n\\[\n\\int_0^1 x\\,dx\n\\]')
+      expect(result).to.include('math-block')
+    })
+  })
+
+  describe('Code is not parsed as math', () => {
+    it('leaves $ in inline code alone', () => {
+      const result = renderMarkdown('Run `echo $HOME and $PATH` now')
+      expect(result).to.not.include('katex')
+      expect(result).to.include('$HOME and $PATH')
+    })
+
+    it('leaves $ and \\( in fenced code blocks alone', () => {
+      const result = renderMarkdown('```bash\necho "$A" "$B"\ngrep "\\(x\\)" f\n```')
+      expect(result).to.not.include('katex')
+      expect(result).to.include('<pre')
+    })
+
+    it('still renders math next to code', () => {
+      const result = renderMarkdown('Use `x` where $x^2$')
+      expect(result).to.include('math-inline')
+      expect(result).to.include('<code>x</code>')
+    })
+  })
+
+  describe('Sanitization', () => {
+    it('strips script tags', () => {
+      const result = renderMarkdown('hi <script>window.pwned = 1</script>')
+      expect(result).to.not.include('<script')
+    })
+
+    it('strips event handler attributes', () => {
+      const result = renderMarkdown('<img src="x" onerror="require(\'child_process\')">')
+      expect(result).to.not.include('onerror')
+    })
+
+    it('strips javascript: links', () => {
+      const result = renderMarkdown('[click](javascript:alert(1))')
+      expect(result).to.not.include('javascript:')
+    })
+
+    it('strips iframes and forms', () => {
+      const result = renderMarkdown('<iframe src="https://e.com"></iframe><form><input></form>')
+      expect(result).to.not.include('<iframe')
+      expect(result).to.not.include('<form')
+      expect(result).to.not.include('<input')
+    })
+
+    it('opens safe links in a new window', () => {
+      const result = renderMarkdown('[site](https://example.com)')
+      expect(result).to.include('href="https://example.com"')
+      expect(result).to.include('target="_blank"')
+      expect(result).to.include('rel="noopener noreferrer"')
+    })
+
+    it('keeps KaTeX markup intact', () => {
+      const result = renderMarkdown('$\\frac{a}{b} + \\sqrt{x}$')
+      expect(result).to.include('katex-html')
+      expect(result).to.include('<math')
+      expect(result).to.include('frac-line')
+    })
+
+    it('keeps syntax highlighting classes', () => {
+      const result = renderMarkdown('```js\nconst a = 1\n```')
+      expect(result).to.include('class="token keyword"')
+    })
+
+    it('sanitizeHtml removes handlers from raw HTML', () => {
+      expect(sanitizeHtml('<b onclick="x()">t</b>')).to.equal('<b>t</b>')
+    })
+  })
+
+  describe('KaTeX trust', () => {
+    it('blocks javascript: URLs in \\href', () => {
+      const result = renderMarkdown('$\\href{javascript:alert(1)}{x}$')
+      // Rejected commands are shown as error text, never as a link
+      expect(result).to.not.match(/href="javascript:/)
+    })
+
+    it('blocks \\htmlClass and similar HTML extensions', () => {
+      const result = renderMarkdown('$\\htmlClass{evil}{x}$')
+      expect(result).to.not.include('class="enclosing evil"')
+    })
+
+    it('allows https links in \\href', () => {
+      const result = renderMarkdown('$\\href{https://example.com}{x}$')
+      expect(result).to.include('href="https://example.com"')
     })
   })
 })

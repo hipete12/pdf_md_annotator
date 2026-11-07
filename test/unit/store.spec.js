@@ -1,202 +1,26 @@
 /**
- * Unit tests for the Vuex store
+ * Unit tests for the Vuex store (src/renderer/store)
  */
 
-import { createStore } from 'vuex'
+import { createAppStore } from '../../src/renderer/store'
+import { DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_SYSTEM_TEMPLATES } from '../../src/common/llm'
 
-// Mock electron ipcRenderer
-const mockIpcRenderer = {
-  invoke: () => Promise.resolve({}),
-  on: () => {},
-  removeListener: () => {}
+// Records every ipcRenderer.invoke call so save behaviour can be asserted
+const createMockIpc = () => {
+  const calls = []
+  return {
+    calls,
+    invoke: (channel, payload) => {
+      calls.push({ channel, payload })
+      return Promise.resolve({ success: true })
+    },
+    on: () => {},
+    removeListener: () => {}
+  }
 }
 
-// Mock the store module
-const createTestStore = () => {
-  return createStore({
-    state: {
-      pdfPath: null,
-      pdfDocument: null,
-      pageCount: 0,
-      currentPage: 1,
-      scale: 1.0,
-      pageOrder: [],
-      deletedPages: [],
-      sidebarVisible: true,
-      sidebarWidth: 200,
-      selectedPages: [],
-      annotations: {},
-      selectedAnnotation: null,
-      settings: {
-        markdown: {
-          fontSize: 14,
-          lineHeight: 1.6,
-          fontFamily: 'system-ui'
-        },
-        annotationBox: {
-          defaultWidth: 300,
-          defaultHeight: 200,
-          minWidth: 100,
-          minHeight: 50
-        },
-        latex: {
-          macros: {},
-          throwOnError: false
-        },
-        shortcuts: {
-          bold: 'Ctrl+B',
-          italic: 'Ctrl+I',
-          underline: 'Ctrl+U',
-          save: 'Ctrl+S',
-          hideAnnotation: 'Ctrl+H'
-        },
-        ui: {
-          sidebarWidth: 200,
-          sidebarVisible: true,
-          theme: 'light'
-        }
-      },
-      settingsModalOpen: false,
-      isDirty: false,
-      pdfmarkVersion: '1.0.0'
-    },
-    
-    getters: {
-      currentPageAnnotations: (state) => {
-        return state.annotations[state.currentPage] || []
-      },
-      visiblePages: (state) => {
-        return state.pageOrder.filter(idx => !state.deletedPages.includes(idx))
-      },
-      hasUnsavedChanges: (state) => state.isDirty,
-      annotationById: (state) => (id) => {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const found = pageAnnotations.find(a => a.id === id)
-          if (found) return found
-        }
-        return null
-      },
-      latexMacros: (state) => state.settings.latex.macros
-    },
-    
-    mutations: {
-      SET_PDF_DOCUMENT(state, { document, path }) {
-        state.pdfDocument = document
-        state.pdfPath = path
-        state.pageCount = document.numPages
-        state.pageOrder = Array.from({ length: document.numPages }, (_, i) => i + 1)
-        state.deletedPages = []
-        state.annotations = {}
-        state.currentPage = 1
-        state.isDirty = false
-      },
-      SET_CURRENT_PAGE(state, page) {
-        state.currentPage = page
-      },
-      SET_SCALE(state, scale) {
-        state.scale = Math.max(0.25, Math.min(4, scale))
-      },
-      SET_SIDEBAR_VISIBLE(state, visible) {
-        state.sidebarVisible = visible
-      },
-      SET_SELECTED_PAGES(state, pages) {
-        state.selectedPages = pages
-      },
-      REORDER_PAGES(state, { fromIndex, toIndex }) {
-        const [removed] = state.pageOrder.splice(fromIndex, 1)
-        state.pageOrder.splice(toIndex, 0, removed)
-        state.isDirty = true
-      },
-      DELETE_PAGES(state, pageIndices) {
-        pageIndices.forEach(idx => {
-          if (!state.deletedPages.includes(idx)) {
-            state.deletedPages.push(idx)
-          }
-        })
-        state.selectedPages = []
-        state.isDirty = true
-      },
-      ADD_ANNOTATION(state, { pageIndex, annotation }) {
-        if (!state.annotations[pageIndex]) {
-          state.annotations[pageIndex] = []
-        }
-        state.annotations[pageIndex].push({
-          id: 'test-id-' + Math.random(),
-          type: 'markdown',
-          x: annotation.x,
-          y: annotation.y,
-          width: state.settings.annotationBox.defaultWidth,
-          height: state.settings.annotationBox.defaultHeight,
-          content: '',
-          style: { ...state.settings.markdown },
-          isCollapsed: false,
-          collapsedTitle: '',
-          ...annotation
-        })
-        state.isDirty = true
-      },
-      UPDATE_ANNOTATION(state, { id, updates }) {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const annotation = pageAnnotations.find(a => a.id === id)
-          if (annotation) {
-            Object.assign(annotation, updates)
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      DELETE_ANNOTATION(state, id) {
-        for (const [pageIndex, pageAnnotations] of Object.entries(state.annotations)) {
-          const index = pageAnnotations.findIndex(a => a.id === id)
-          if (index !== -1) {
-            pageAnnotations.splice(index, 1)
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      SET_SELECTED_ANNOTATION(state, id) {
-        state.selectedAnnotation = id
-      },
-      SET_ANNOTATION_COLLAPSED_TITLE(state, { id, title }) {
-        for (const pageAnnotations of Object.values(state.annotations)) {
-          const annotation = pageAnnotations.find(a => a.id === id)
-          if (annotation) {
-            annotation.collapsedTitle = title
-            annotation.isCollapsed = true
-            state.isDirty = true
-            break
-          }
-        }
-      },
-      LOAD_ANNOTATIONS(state, data) {
-        if (data) {
-          state.annotations = data.annotations || {}
-          state.pageOrder = data.pageOrder || state.pageOrder
-          state.deletedPages = data.deletedPages || []
-        }
-        state.isDirty = false
-      },
-      SET_SETTINGS(state, settings) {
-        state.settings = { ...state.settings, ...settings }
-      },
-      SET_SETTING(state, { path, value }) {
-        const keys = path.split('.')
-        let obj = state.settings
-        for (let i = 0; i < keys.length - 1; i++) {
-          obj = obj[keys[i]]
-        }
-        obj[keys[keys.length - 1]] = value
-      },
-      SET_SETTINGS_MODAL(state, open) {
-        state.settingsModalOpen = open
-      },
-      MARK_CLEAN(state) {
-        state.isDirty = false
-      }
-    }
-  })
-}
+const createTestStore = (ipcRenderer = createMockIpc()) => createAppStore({ ipcRenderer })
+
 
 describe('Vuex Store', () => {
   let store
@@ -450,5 +274,276 @@ describe('Vuex Store', () => {
       store.state.isDirty = true
       expect(store.getters.hasUnsavedChanges).to.be.true
     })
+  })
+})
+
+describe('Settings hydration', () => {
+  it('starts with the shared defaults', () => {
+    const store = createTestStore()
+    expect(store.state.settings.annotationBox.minWidth).to.equal(30)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+  })
+
+  it('HYDRATE_SETTINGS does not mark the document dirty', () => {
+    const store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('HYDRATE_SETTINGS', { markdown: { fontSize: 18 } })
+    expect(store.state.isDirty).to.be.false
+    expect(store.state.settings.markdown.fontSize).to.equal(18)
+  })
+
+  it('HYDRATE_SETTINGS keeps nested defaults missing from saved settings', () => {
+    const store = createTestStore()
+    // Shape written by older versions: no listMargin / padding
+    store.commit('HYDRATE_SETTINGS', {
+      markdown: { fontSize: 16, lineHeight: 1.6, fontFamily: 'serif' },
+      annotationBox: { defaultWidth: 250, defaultHeight: 200, minWidth: 100, minHeight: 50 }
+    })
+    expect(store.state.settings.markdown.fontSize).to.equal(16)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+    expect(store.state.settings.annotationBox.padding).to.equal(4)
+  })
+
+  it('loadSettings ignores non-settings keys such as recentFiles', async () => {
+    const ipc = createMockIpc()
+    ipc.invoke = () => Promise.resolve({ markdown: { fontSize: 20 }, recentFiles: ['/x.pdf'] })
+    const store = createTestStore(ipc)
+    await store.dispatch('loadSettings')
+    expect(store.state.settings.markdown.fontSize).to.equal(20)
+    expect(store.state.settings).to.not.have.property('recentFiles')
+    expect(store.state.isDirty).to.be.false
+  })
+
+  it('LOAD_ANNOTATIONS merges document settings per section', () => {
+    const store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('SET_SETTING', { path: 'latex.macros', value: { '\\A': 'a' } })
+    store.commit('LOAD_ANNOTATIONS', {
+      settings: {
+        markdown: { fontSize: 12 },
+        latex: { macros: { '\\B': 'b' } }
+      }
+    })
+    expect(store.state.settings.markdown.fontSize).to.equal(12)
+    expect(store.state.settings.markdown.listMargin).to.equal(0.5)
+    expect(store.state.settings.latex.macros).to.deep.equal({ '\\B': 'b' })
+  })
+
+  it('default settings are not shared between store instances', () => {
+    const a = createTestStore()
+    const b = createTestStore()
+    a.commit('SET_SETTING', { path: 'markdown.fontSize', value: 30 })
+    expect(b.state.settings.markdown.fontSize).to.equal(14)
+  })
+})
+
+describe('Saving .pdfmark', () => {
+  const savedData = (ipc) => ipc.calls.filter(c => c.channel === 'save-pdfmark').map(c => c.payload.data)
+
+  it('keeps the created timestamp from the loaded file and sets modified', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('LOAD_ANNOTATIONS', { version: '1.0.0', created: '2020-01-01T00:00:00.000Z' })
+
+    await store.dispatch('savePdfmark')
+    await store.dispatch('savePdfmark')
+
+    const [first, second] = savedData(ipc)
+    expect(first.created).to.equal('2020-01-01T00:00:00.000Z')
+    expect(second.created).to.equal('2020-01-01T00:00:00.000Z')
+    expect(Date.parse(second.modified)).to.be.greaterThan(Date.parse(first.created))
+  })
+
+  it('sets created on the first save of a new .pdfmark and keeps it afterwards', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+
+    await store.dispatch('savePdfmark')
+    await new Promise(resolve => setTimeout(resolve, 5))
+    await store.dispatch('savePdfmark')
+
+    const [first, second] = savedData(ipc)
+    expect(first.created).to.be.a('string')
+    expect(second.created).to.equal(first.created)
+    expect(second.modified).to.not.equal(first.created)
+  })
+
+  it('resets created when a different PDF is opened', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.commit('LOAD_ANNOTATIONS', { created: '2020-01-01T00:00:00.000Z' })
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/b.pdf' })
+    expect(store.state.pdfmarkCreated).to.be.null
+  })
+})
+
+describe('Undo / Redo', () => {
+  let store
+  const allAnnotations = () => Object.values(store.state.annotations).flat()
+
+  beforeEach(() => {
+    store = createTestStore()
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 3 }, path: '/a.pdf' })
+  })
+
+  it('undoes and redoes creating an annotation', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+
+    store.dispatch('undo')
+    expect(allAnnotations()).to.have.length(0)
+
+    store.dispatch('redo')
+    expect(store.state.annotations[1].map(a => a.id)).to.deep.equal([id])
+  })
+
+  it('undoes and redoes deleting an annotation', () => {
+    store.dispatch('createAnnotation', { pageIndex: 2, x: 10, y: 20 })
+    const id = store.state.annotations[2][0].id
+    store.dispatch('deleteAnnotation', id)
+    expect(allAnnotations()).to.have.length(0)
+
+    store.dispatch('undo')
+    expect(store.state.annotations[2].map(a => a.id)).to.deep.equal([id])
+
+    store.dispatch('redo')
+    expect(allAnnotations()).to.have.length(0)
+  })
+
+  it('undoes and redoes an update', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('updateAnnotation', { id, updates: { content: 'hello' } })
+
+    store.dispatch('undo')
+    expect(store.getters.annotationById(id).content).to.equal('')
+
+    store.dispatch('redo')
+    expect(store.getters.annotationById(id).content).to.equal('hello')
+  })
+
+  it('can redo several steps in a row', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('updateAnnotation', { id, updates: { content: 'one' } })
+    store.dispatch('updateAnnotation', { id, updates: { content: 'two' } })
+
+    store.dispatch('undo')
+    store.dispatch('undo')
+    store.dispatch('undo')
+    expect(allAnnotations()).to.have.length(0)
+    expect(store.state.redoStack).to.have.length(3)
+
+    store.dispatch('redo')
+    store.dispatch('redo')
+    store.dispatch('redo')
+    expect(store.getters.annotationById(id).content).to.equal('two')
+    expect(store.state.redoStack).to.have.length(0)
+    expect(store.state.undoStack).to.have.length(3)
+  })
+
+  it('clears the redo stack when a new action is performed', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    store.dispatch('undo')
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 30, y: 40 })
+    expect(store.state.redoStack).to.have.length(0)
+  })
+
+  it('does not share annotation objects with the history stacks', () => {
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 20 })
+    const id = store.state.annotations[1][0].id
+    store.dispatch('undo')
+    store.dispatch('redo')
+    store.commit('UPDATE_ANNOTATION', { id, updates: { content: 'changed' } })
+    expect(store.state.redoStack).to.have.length(0)
+    expect(store.state.undoStack[0].annotation.content).to.equal('')
+  })
+})
+
+describe('Save As', () => {
+  it('sends the current .pdfmark data to save-pdf-as and marks clean on success', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 2 }, path: '/docs/a.pdf' })
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 1, y: 2 })
+    expect(store.state.isDirty).to.be.true
+
+    const result = await store.dispatch('savePdfmarkAs')
+
+    const call = ipc.calls.find(c => c.channel === 'save-pdf-as')
+    expect(call.payload.sourcePdfPath).to.equal('/docs/a.pdf')
+    expect(call.payload.data.annotations[1]).to.have.length(1)
+    expect(call.payload.data.pageOrder).to.deep.equal([1, 2])
+    expect(call.payload.data.created).to.be.a('string')
+    expect(result.success).to.be.true
+    expect(store.state.isDirty).to.be.false
+  })
+
+  it('stays dirty when the dialog is cancelled', async () => {
+    const ipc = createMockIpc()
+    ipc.invoke = () => Promise.resolve({ success: false, cancelled: true })
+    const store = createTestStore(ipc)
+    store.commit('SET_PDF_DOCUMENT', { document: { numPages: 1 }, path: '/a.pdf' })
+    store.dispatch('createAnnotation', { pageIndex: 1, x: 1, y: 2 })
+
+    const result = await store.dispatch('savePdfmarkAs')
+    expect(result.cancelled).to.be.true
+    expect(store.state.isDirty).to.be.true
+  })
+
+  it('does nothing when no PDF is open', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    expect(await store.dispatch('savePdfmarkAs')).to.be.null
+    expect(ipc.calls).to.have.length(0)
+  })
+})
+
+describe('LLM models', () => {
+  it('stores model lists per provider', () => {
+    const store = createTestStore()
+    store.commit('SET_LLM_MODELS', { providerId: 'ollama', models: [{ id: 'llava' }] })
+    store.commit('SET_LLM_MODELS', { providerId: 'openai', models: [{ id: 'gpt-4o' }] })
+    expect(store.state.llmModels.ollama).to.deep.equal([{ id: 'llava' }])
+    expect(store.state.llmModels.openai).to.deep.equal([{ id: 'gpt-4o' }])
+    expect(store.state.isDirty).to.equal(false)
+  })
+
+  it('hydrated settings contain llm/chat defaults', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { provider: 'ollama' } })
+    expect(store.state.settings.llm.provider).to.equal('ollama')
+    expect(store.state.settings.llm.baseUrls.openrouter).to.equal('https://openrouter.ai/api/v1')
+    expect(store.state.settings.chat.panelWidth).to.equal(420)
+  })
+})
+
+describe('saveSettings', () => {
+  it('sends a plain, cloneable object over IPC', async () => {
+    const ipc = createMockIpc()
+    const store = createTestStore(ipc)
+    store.commit('SET_SETTING', { path: 'ui.theme', value: 'dark' })
+    await store.dispatch('saveSettings')
+    const call = ipc.calls.find(c => c.channel === 'set-settings')
+    // Electron IPC uses structured clone, which throws on Vue's reactive Proxies
+    expect(() => structuredClone(call.payload)).to.not.throw()
+    expect(call.payload.ui.theme).to.equal('dark')
+  })
+})
+
+describe('System prompt upgrade', () => {
+  it('replaces an unmodified previous default with the current one', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { systemTemplate: PREVIOUS_SYSTEM_TEMPLATES[0] } })
+    expect(store.state.settings.llm.systemTemplate).to.equal(DEFAULT_SYSTEM_TEMPLATE)
+  })
+
+  it('keeps a customised prompt', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { systemTemplate: 'My own prompt {{document}}' } })
+    expect(store.state.settings.llm.systemTemplate).to.equal('My own prompt {{document}}')
   })
 })

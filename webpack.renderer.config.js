@@ -11,7 +11,7 @@ module.exports = {
     electron: 'commonjs electron'
   },
   output: {
-    path: path.resolve(__dirname, 'dist/renderer'),
+    path: path.resolve(__dirname, 'app-build/renderer'),
     filename: 'renderer.js',
     publicPath: './'
   },
@@ -92,7 +92,7 @@ module.exports = {
   },
   devServer: {
     static: {
-      directory: path.join(__dirname, 'dist/renderer')
+      directory: path.join(__dirname, 'app-build/renderer')
     },
     port: 9080,
     hot: true

@@ -47,6 +47,15 @@
     <div class="toolbar-spacer"></div>
     
     <div class="toolbar-group">
+      <button
+        class="toolbar-button"
+        :class="{ active: chatOpen }"
+        title="Chat about this document (Ctrl+Shift+L)"
+        @click="$emit('toggle-chat')"
+      >
+        <svg class="toolbar-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3.5h10v7H7l-3 2.5v-2.5H3z" /></svg>
+        Chat
+      </button>
       <button 
         class="toolbar-button" 
         @click="$emit('open-settings')" 
@@ -69,7 +78,11 @@ import { useStore } from 'vuex'
 export default {
   name: 'Toolbar',
   
-  emits: ['zoom-in', 'zoom-out', 'zoom-reset', 'open-settings'],
+  props: {
+    chatOpen: { type: Boolean, default: false }
+  },
+  
+  emits: ['zoom-in', 'zoom-out', 'zoom-reset', 'open-settings', 'toggle-chat'],
   
   setup() {
     const store = useStore()
@@ -131,6 +144,22 @@ export default {
 .page-total {
   color: var(--text-muted);
   font-size: 13px;
+}
+
+.toolbar-button.active {
+  border-color: var(--primary-color);
+  color: var(--primary-color);
+  background: var(--selection-color);
+}
+
+.toolbar-icon {
+  width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
 }
 
 .unsaved-indicator {

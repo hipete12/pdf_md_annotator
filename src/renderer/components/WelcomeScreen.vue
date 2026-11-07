@@ -18,6 +18,8 @@
         <li><kbd>Ctrl+U</kbd> Underline text</li>
         <li><kbd>Ctrl+H</kbd> Hide/Show annotation</li>
         <li><kbd>Ctrl+\</kbd> Toggle sidebar</li>
+        <li><kbd>Ctrl+Shift+L</kbd> Toggle chat</li>
+        <li><kbd>Ctrl+L</kbd> Add selection to chat</li>
       </ul>
     </div>
   </div>

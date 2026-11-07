@@ -14,7 +14,13 @@
           :ref="el => setCanvasRef(el, pageNum)" 
           class="pdf-canvas"
         ></canvas>
-        
+
+        <div
+          v-if="shouldRenderTextLayer(pageNum)"
+          :ref="el => setTextLayerRef(el, pageNum)"
+          class="textLayer"
+        ></div>
+
         <div v-if="shouldRenderAnnotations(pageNum)" class="annotation-layer">
           <AnnotationBox
             v-for="annotation in getPageAnnotations(pageNum)"
@@ -32,8 +38,9 @@
 </template>
 
 <script>
-import { ref, computed, watch, onMounted, onUnmounted, shallowRef } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onUnmounted, shallowRef } from 'vue'
 import { useStore } from 'vuex'
+import { TextLayer } from 'pdfjs-dist'
 import AnnotationBox from './AnnotationBox.vue'
 
 const MAX_CANVAS_SIZE = 16384
@@ -44,7 +51,7 @@ const MAX_CONCURRENT_RENDERS = 2
 const OVERSCAN_RATIO = 0.5
 
 function isCancelledError(err) {
-  return err && err.name === 'RenderingCancelledException'
+  return err && (err.name === 'RenderingCancelledException' || err.name === 'AbortException')
 }
 
 export default {
@@ -77,6 +84,13 @@ export default {
     const pendingPages = new Set()
     const inFlightRenders = new Set()
 
+    // Text layer state
+    const textLayerRefs = new Map()
+    const textLayerEntries = new Map()
+    const textLayerTasks = new Map()
+    const renderedTextLayers = new Set()
+    const baseViewports = new Map()
+
     let activeRenders = 0
     let renderGeneration = 0
     let estimatedWidth = DEFAULT_PAGE_WIDTH
@@ -84,19 +98,33 @@ export default {
     let scrollTickPending = false
     let resizeTimeout = null
     let rasterCommitTimeout = null
+    let textScaleUpdateTimeout = null
     
     const setCanvasRef = (el, pageNum) => {
       if (el) {
         canvasRefs.set(pageNum, el)
-        if (renderWindowPages.value.has(pageNum) && !renderedPages.has(pageNum)) {
-          pendingPages.add(pageNum)
-          processQueue()
-        }
+      if (renderWindowPages.value.has(pageNum) && !renderedPages.has(pageNum)) {
+        pendingPages.add(pageNum)
+        // Wait for Vue to finish mounting the canvas before starting a render.
+        // Queueing synchronously here can race the first render pass and leave
+        // the canvas at its default 300x150 size until the user scrolls.
+        nextTick(processQueue)
+      }
       } else {
         canvasRefs.delete(pageNum)
       }
     }
     
+    const setTextLayerRef = (el, pageNum) => {
+      if (el) {
+        textLayerRefs.set(pageNum, el)
+      } else {
+        textLayerRefs.delete(pageNum)
+        cancelTextLayer(pageNum)
+        baseViewports.delete(pageNum)
+      }
+    }
+
     const getPageAnnotations = (pageNum) => store.state.annotations[pageNum] || []
     
     const getPageShellStyle = (pageNum) => {
@@ -112,6 +140,8 @@ export default {
     }
     
     const shouldRenderCanvas = (pageNum) => renderWindowPages.value.has(pageNum)
+
+    const shouldRenderTextLayer = (pageNum) => renderWindowPages.value.has(pageNum)
     
     const shouldRenderAnnotations = (pageNum) => {
       if (renderWindowPages.value.has(pageNum)) return true
@@ -198,6 +228,15 @@ export default {
         offset += height + PAGE_GAP
       }
 
+      // Page under the middle of the viewport ("the page being read")
+      const viewportMiddle = (viewportTop + viewportBottom) / 2
+      let middlePage = orderedPages.value[0]
+      for (const pageNum of orderedPages.value) {
+        if (offsets.get(pageNum) <= viewportMiddle) middlePage = pageNum
+        else break
+      }
+      if (store.state.viewPage !== middlePage) store.commit('SET_VIEW_PAGE', middlePage)
+
       return orderedPages.value.filter(pageNum => {
         const top = offsets.get(pageNum)
         const metric = pageMetrics.get(pageNum)
@@ -245,6 +284,133 @@ export default {
       }
       // Leave tasks tracked until their finally blocks run; renderPage awaits
       // any existing task before reusing its canvas.
+    }
+
+    const cancelTextLayer = (pageNum) => {
+      const task = textLayerTasks.get(pageNum)
+      if (task) {
+        try {
+          task.layer.cancel()
+        } catch (e) {
+          // Cancellation is best-effort; stale text layer guards still apply.
+        }
+        textLayerTasks.delete(pageNum)
+      }
+
+      const entry = textLayerEntries.get(pageNum)
+      if (entry) {
+        try {
+          entry.layer.cancel()
+        } catch (e) {
+          // Cancellation is best-effort.
+        }
+        textLayerEntries.delete(pageNum)
+      }
+
+      renderedTextLayers.delete(pageNum)
+
+      const container = textLayerRefs.get(pageNum)
+      if (container) {
+        container.replaceChildren()
+      }
+    }
+
+    const cancelAllTextLayers = () => {
+      const pageNums = new Set([
+        ...textLayerTasks.keys(),
+        ...textLayerEntries.keys(),
+        ...renderedTextLayers
+      ])
+      for (const pageNum of pageNums) {
+        cancelTextLayer(pageNum)
+      }
+    }
+
+    const syncTextLayerScale = () => {
+      const scale = String(displayScale.value)
+      for (const container of textLayerRefs.values()) {
+        container.style.setProperty('--scale-factor', scale)
+      }
+    }
+
+    const updateTextLayerViewports = () => {
+      const scale = displayScale.value
+      for (const [pageNum, entry] of textLayerEntries) {
+        const container = textLayerRefs.get(pageNum)
+        if (!container || textLayerTasks.has(pageNum)) continue
+        container.style.setProperty('--scale-factor', String(scale))
+        try {
+          entry.layer.update({
+            viewport: entry.baseViewport.clone({ scale })
+          })
+        } catch (e) {
+          // Stale layers are discarded by the next render.
+        }
+      }
+    }
+
+    const scheduleTextLayerScaleUpdate = () => {
+      syncTextLayerScale()
+      clearTimeout(textScaleUpdateTimeout)
+      textScaleUpdateTimeout = setTimeout(() => {
+        textScaleUpdateTimeout = null
+        updateTextLayerViewports()
+      }, 150)
+    }
+
+    const renderTextLayer = async (pageNum, page, baseViewport, generation) => {
+      const container = textLayerRefs.get(pageNum)
+      if (!container) return
+
+      if (renderedTextLayers.has(pageNum) && textLayerEntries.has(pageNum)) {
+        return
+      }
+
+      // Replace any previous text layer for this page.
+      cancelTextLayer(pageNum)
+      container.replaceChildren()
+
+      const scale = displayScale.value
+      container.style.setProperty('--scale-factor', String(scale))
+
+      const layer = new TextLayer({
+        textContentSource: page.streamTextContent({ includeMarkedContent: true }),
+        container,
+        viewport: baseViewport.clone({ scale })
+      })
+      const task = { layer, container }
+      textLayerTasks.set(pageNum, task)
+
+      try {
+        await layer.render()
+
+        if (
+          generation !== renderGeneration ||
+          textLayerRefs.get(pageNum) !== container ||
+          textLayerTasks.get(pageNum) !== task
+        ) {
+          return
+        }
+
+        const currentScale = displayScale.value
+        if (currentScale !== scale) {
+          layer.update({
+            viewport: baseViewport.clone({ scale: currentScale })
+          })
+          container.style.setProperty('--scale-factor', String(currentScale))
+        }
+
+        renderedTextLayers.add(pageNum)
+        textLayerEntries.set(pageNum, { layer, baseViewport })
+      } catch (err) {
+        if (!isCancelledError(err)) {
+          console.error(`Page ${pageNum} text layer error:`, err)
+        }
+      } finally {
+        if (textLayerTasks.get(pageNum) === task) {
+          textLayerTasks.delete(pageNum)
+        }
+      }
     }
     
     const renderPageWithViewport = async (pageNum, page, canvas, viewport, pixelRatio, generation) => {
@@ -320,6 +486,7 @@ export default {
         if (generation !== renderGeneration) return
         
         const baseViewport = page.getViewport({ scale: 1.0 })
+        baseViewports.set(pageNum, baseViewport)
         recordPageMetric(pageNum, { width: baseViewport.width, height: baseViewport.height })
         
         const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
@@ -338,7 +505,10 @@ export default {
           canvasPixelRatio = adjustedRatio
         }
         
-        await renderPageWithViewport(pageNum, page, canvas, renderViewport, canvasPixelRatio, generation)
+        await Promise.all([
+          renderPageWithViewport(pageNum, page, canvas, renderViewport, canvasPixelRatio, generation),
+          renderTextLayer(pageNum, page, baseViewport, generation)
+        ])
       } catch (err) {
         if (!isCancelledError(err)) {
           console.error(`Failed to render page ${pageNum}:`, err)
@@ -461,6 +631,7 @@ export default {
           target.closest('.annotation-actions') ||
           target.closest('.annotation-action-button') ||
           target.closest('.style-panel') ||
+          target.closest('.textLayer span') ||
           target.closest('button') ||
           target.closest('input') ||
           target.closest('select')) {
@@ -509,6 +680,14 @@ export default {
     watch(pdfDocument, () => {
       bumpGeneration()
       resetRenderState()
+      cancelAllTextLayers()
+      textLayerRefs.clear()
+      textLayerEntries.clear()
+      textLayerTasks.clear()
+      renderedTextLayers.clear()
+      baseViewports.clear()
+      clearTimeout(textScaleUpdateTimeout)
+      textScaleUpdateTimeout = null
       pageMetrics.clear()
       estimatedWidth = DEFAULT_PAGE_WIDTH
       estimatedHeight = DEFAULT_PAGE_HEIGHT
@@ -520,6 +699,7 @@ export default {
     watch(displayScale, () => {
       // Instant visual feedback: shells/annotations follow display scale,
       // existing canvases are CSS-scaled, high-res rerender is debounced.
+      scheduleTextLayerScaleUpdate()
       updateCanvasTransforms()
       scheduleRenderWindow()
       debounceCommitRasterScale()
@@ -536,6 +716,20 @@ export default {
       for (const pageNum of canvasRefs.keys()) {
         if (!validPages.has(pageNum)) canvasRefs.delete(pageNum)
       }
+      const textLayerPages = new Set([
+        ...textLayerRefs.keys(),
+        ...textLayerEntries.keys(),
+        ...textLayerTasks.keys(),
+        ...renderedTextLayers,
+        ...baseViewports.keys()
+      ])
+      for (const pageNum of textLayerPages) {
+        if (!validPages.has(pageNum)) {
+          cancelTextLayer(pageNum)
+          textLayerRefs.delete(pageNum)
+          baseViewports.delete(pageNum)
+        }
+      }
       if (pageMetrics.size === 0) {
         estimatedWidth = DEFAULT_PAGE_WIDTH
         estimatedHeight = DEFAULT_PAGE_HEIGHT
@@ -546,6 +740,12 @@ export default {
     
     watch(currentPage, (newPage) => {
       scrollToPage(newPage)
+    })
+    
+    // Explicit navigation requests (e.g. clicking a chat context) scroll even
+    // when the target equals currentPage, which does not follow scrolling
+    watch(() => store.state.scrollRequest, (request) => {
+      if (request) scrollToPage(request.pageId)
     })
     
     watch(selectedAnnotation, () => {
@@ -570,11 +770,15 @@ export default {
         bumpGeneration()
         rasterScale.value = displayScale.value
         scheduleRenderWindow()
+        // The first pass only creates the canvas elements; run a second pass
+        // once they exist so the initial page rasterizes without user input.
+        nextTick(() => scheduleRenderWindow())
       }
     })
 
     onUnmounted(() => {
       cancelAllRenders()
+      cancelAllTextLayers()
       document.removeEventListener('click', handleClickOutside)
       window.removeEventListener('resize', handleResize)
       if (viewerContainer.value) {
@@ -582,6 +786,7 @@ export default {
       }
       clearTimeout(resizeTimeout)
       clearTimeout(rasterCommitTimeout)
+      clearTimeout(textScaleUpdateTimeout)
     })
 
     return {
@@ -589,8 +794,10 @@ export default {
       displayScale,
       orderedPages,
       setCanvasRef,
+      setTextLayerRef,
       getPageShellStyle,
       shouldRenderCanvas,
+      shouldRenderTextLayer,
       shouldRenderAnnotations,
       getPageAnnotations,
       handleDoubleClick,

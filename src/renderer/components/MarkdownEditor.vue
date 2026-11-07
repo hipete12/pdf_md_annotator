@@ -178,7 +178,7 @@ export default {
       }
       
       // Hide annotation: Ctrl+H
-      if (e.ctrlKey && e.key === 'h') {
+      if (e.ctrlKey && e.key.toLowerCase() === 'h') {
         e.preventDefault()
         emit('hide-annotation')
         return
@@ -311,7 +311,9 @@ export default {
 .markdown-preview {
   min-height: 100%;
   cursor: text;
-  white-space: pre-wrap;
+  /* Keep source newlines from rendering as blank lines: marked converts single
+     newlines to <br> (breaks: true) and block tags carry the structure. */
+  white-space: normal;
   word-wrap: break-word;
   overflow-wrap: break-word;
 }

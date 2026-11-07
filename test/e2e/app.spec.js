@@ -16,11 +16,14 @@ function getTempDir() {
 // Helper to launch the Electron app
 async function launchApp(userDataDir) {
   const electronPath = require('electron')
-  const appPath = path.join(__dirname, '../../dist/main/main.js')
+  const appPath = path.join(__dirname, '../../app-build/main/main.js')
+  // Ubuntu 24.04 restricts unprivileged user namespaces, so the Chromium
+  // sandbox cannot initialize in test/dev runs on Linux.
+  const args = process.platform === 'linux' ? ['--no-sandbox', appPath] : [appPath]
   
   const app = await _electron.launch({
     executablePath: electronPath,
-    args: [appPath],
+    args,
     env: {
       ...process.env,
       NODE_ENV: 'test',

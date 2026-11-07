@@ -1,23 +1,26 @@
 {
   "name": "pdf-annotator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "PDF Viewer and Annotator with Markdown and LaTeX support",
-  "main": "dist/main/main.js",
+  "main": "app-build/main/main.js",
   "scripts": {
     "dev": "node scripts/dev-runner.js",
     "build": "node scripts/build.js",
     "build:main": "webpack --config webpack.main.config.js --mode production",
     "build:renderer": "webpack --config webpack.renderer.config.js --mode production",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('app-build',{recursive:true,force:true})\"",
     "pack": "npm run build && electron-builder --dir",
-    "dist": "npm run build && electron-builder",
-    "test": "karma start test/karma.conf.js",
+    "dist": "npm run clean && npm run build && electron-builder --publish never",
+    "dist:linux": "npm run clean && npm run build && electron-builder --linux AppImage --x64 --publish never",
+    "test": "node scripts/test-unit.js",
     "test:e2e": "playwright test",
     "lint": "eslint --ext .js,.vue src"
   },
-  "author": "",
+  "author": "hipete12",
   "license": "MIT",
   "dependencies": {
     "@electron/remote": "^2.1.2",
+    "dompurify": "^3.4.17",
     "electron-localshortcut": "^3.2.1",
     "electron-log": "^5.1.1",
     "electron-store": "^8.1.0",
@@ -44,6 +47,7 @@
     "eslint": "^8.56.0",
     "eslint-plugin-vue": "^9.21.1",
     "html-webpack-plugin": "^5.6.0",
+    "jsdom": "^24.1.3",
     "karma": "^6.4.2",
     "karma-chai": "^0.1.0",
     "karma-mocha": "^2.0.1",
@@ -60,17 +64,15 @@
     "appId": "com.pdfannotator.app",
     "productName": "PDF Annotator",
     "directories": {
-      "output": "release"
+      "output": "dist"
     },
+    "afterPack": "scripts/afterPack.js",
     "files": [
-      "dist/**/*",
+      "app-build/**/*",
       "static/**/*"
     ],
-    "extraResources": [
-      {
-        "from": "node_modules/pdfjs-dist/build/pdf.worker.min.mjs",
-        "to": "pdf.worker.min.mjs"
-      }
+    "asarUnpack": [
+      "app-build/renderer/pdf.worker.min.mjs"
     ],
     "win": {
       "target": [
@@ -80,6 +82,29 @@
         }
       ],
       "icon": "static/icons/icon.ico"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        }
+      ],
+      "category": "Office",
+      "icon": "static/icons",
+      "executableName": "pdf-annotator",
+      "executableArgs": ["--sandbox-auto"],
+      "synopsis": "PDF viewer and annotator with Markdown and LaTeX support",
+      "description": "View and annotate PDFs with Markdown and LaTeX support.",
+      "desktop": {
+        "Name": "PDF Annotator",
+        "Comment": "View and annotate PDF documents",
+        "Keywords": "pdf;annotate;markdown;latex;",
+        "StartupWMClass": "PDF Annotator"
+      }
+    },
+    "appImage": {
+      "artifactName": "${name}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -92,7 +117,8 @@
         "ext": "pdf",
         "name": "PDF Document",
         "description": "PDF Document",
-        "role": "Viewer"
+        "role": "Viewer",
+        "mimeType": "application/pdf"
       }
     ]
   }

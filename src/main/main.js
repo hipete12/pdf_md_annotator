@@ -3,52 +3,63 @@ const path = require('path')
 const fs = require('fs')
 const Store = require('electron-store')
 const log = require('electron-log')
+const { fileURLToPath } = require('url')
 
-// Initialize store for settings
+const { createDefaultSettings, pickSettings } = require('../common/constants')
+const { LLM_PROVIDERS } = require('../common/llm')
+const { listModels, streamChat } = require('./llm')
+const { createSecrets } = require('./secrets')
+
+// Initialize store for settings. User settings live under the top-level keys
+// listed in SETTINGS_KEYS; recentFiles is app state, not a user setting.
 const store = new Store({
   name: 'pdf-annotator-settings',
   defaults: {
-    // Markdown defaults
-    markdown: {
-      fontSize: 14,
-      lineHeight: 1.6,
-      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
-    },
-    // Annotation box defaults
-    annotationBox: {
-      defaultWidth: 300,
-      defaultHeight: 200,
-      minWidth: 100,
-      minHeight: 50
-    },
-    // LaTeX defaults
-    latex: {
-      macros: {},
-      throwOnError: false
-    },
-    // Keyboard shortcuts
-    shortcuts: {
-      bold: 'Ctrl+B',
-      italic: 'Ctrl+I',
-      underline: 'Ctrl+U',
-      save: 'Ctrl+S',
-      hideAnnotation: 'Ctrl+H'
-    },
-    // UI settings
-    ui: {
-      sidebarWidth: 200,
-      sidebarVisible: true,
-      theme: 'light'
-    },
-    // Recent files
+    ...createDefaultSettings(),
     recentFiles: []
   }
 })
+
+const secrets = createSecrets(store)
+const LLM_USER_AGENT = `PDF-Annotator/${app.getVersion()}`
 
 let mainWindow = null
 let currentPdfPath = null
 
 const isDev = process.env.NODE_ENV === 'development'
+
+function resolvePdfPath(candidate, baseDir) {
+  if (!candidate || typeof candidate !== 'string') return null
+  if (candidate.startsWith('-')) return null
+  let candidatePath = candidate
+  if (candidatePath.startsWith('file://')) {
+    try { candidatePath = fileURLToPath(candidatePath) } catch { return null }
+  }
+  const resolved = path.resolve(baseDir || process.cwd(), candidatePath)
+  if (!/\.pdf$/i.test(resolved)) return null
+  return fs.existsSync(resolved) ? resolved : null
+}
+
+function findPdfArgument(argv, startIndex = 1, baseDir) {
+  for (let i = startIndex; i < argv.length; i++) {
+    const pdfPath = resolvePdfPath(argv[i], baseDir)
+    if (pdfPath) return pdfPath
+  }
+  return null
+}
+
+function openExternalIfSafe(url) {
+  try {
+    const { protocol } = new URL(url)
+    if (protocol === 'http:' || protocol === 'https:' || protocol === 'mailto:') {
+      shell.openExternal(url)
+    } else {
+      log.warn('Blocked opening URL with protocol', protocol)
+    }
+  } catch {
+    log.warn('Blocked opening invalid URL')
+  }
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -76,15 +87,29 @@ function createWindow() {
     mainWindow.show()
     
     // Check if opened with a file argument
-    const args = process.argv.slice(isDev ? 2 : 1)
-    const pdfFile = args.find(arg => arg.endsWith('.pdf'))
-    if (pdfFile && fs.existsSync(pdfFile)) {
+    const pdfFile = findPdfArgument(process.argv, isDev ? 2 : 1)
+    if (pdfFile) {
       openPdfFile(pdfFile)
     }
   })
 
   mainWindow.on('closed', () => {
     mainWindow = null
+  })
+
+  // Rendered markdown (notes, chat replies) can contain links. Never open
+  // them inside the app (the renderer has Node integration): hand safe URLs
+  // to the system browser and block everything else, including navigating
+  // the main window away from the app.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    openExternalIfSafe(url)
+    return { action: 'deny' }
+  })
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (url === mainWindow.webContents.getURL()) return
+    if (isDev && process.env.DEV_SERVER_URL && url.startsWith(process.env.DEV_SERVER_URL)) return
+    event.preventDefault()
+    openExternalIfSafe(url)
   })
 
   createMenu()
@@ -148,6 +173,16 @@ function createMenu() {
           accelerator: 'CmdOrCtrl+\\',
           click: () => mainWindow?.webContents.send('toggle-sidebar')
         },
+        {
+          label: 'Toggle Chat',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => mainWindow?.webContents.send('toggle-chat')
+        },
+        {
+          label: 'Add Selection to Chat',
+          accelerator: 'CmdOrCtrl+L',
+          click: () => mainWindow?.webContents.send('chat-attach-selection')
+        },
         { type: 'separator' },
         {
           label: 'Zoom In',
@@ -188,7 +223,7 @@ function createMenu() {
               type: 'info',
               title: 'About PDF Annotator',
               message: 'PDF Annotator',
-              detail: 'A PDF viewer with Markdown and LaTeX annotation support.\nVersion 1.0.0'
+              detail: 'A PDF viewer with Markdown and LaTeX annotation support.\nVersion 1.1.0'
             })
           }
         },
@@ -218,6 +253,8 @@ async function openFileDialog() {
 }
 
 function openPdfFile(filePath) {
+  filePath = path.resolve(filePath)
+
   if (!fs.existsSync(filePath)) {
     dialog.showErrorBox('File Not Found', `The file "${filePath}" does not exist.`)
     return
@@ -258,14 +295,14 @@ function openPdfFile(filePath) {
 
 // IPC Handlers
 ipcMain.handle('get-settings', () => {
-  return store.store
+  return pickSettings(store.store)
 })
 
 ipcMain.handle('set-settings', (event, settings) => {
-  Object.entries(settings).forEach(([key, value]) => {
+  Object.entries(pickSettings(settings)).forEach(([key, value]) => {
     store.set(key, value)
   })
-  return store.store
+  return pickSettings(store.store)
 })
 
 ipcMain.handle('get-setting', (event, key) => {
@@ -305,6 +342,47 @@ ipcMain.handle('commit-pdfmark', async (event, { pdfPath }) => {
     log.error('Failed to commit .pdfmark:', err)
     return { success: false, error: err.message }
   }
+})
+
+// Save As: copy the PDF to a new location and write its .pdfmark next to it,
+// then switch the window to the copy. Annotations are tied to "<name>.pdfmark"
+// beside the PDF, so saving only the .pdfmark elsewhere would not reload.
+ipcMain.handle('save-pdf-as', async (event, { sourcePdfPath, data }) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    title: 'Save PDF and Annotations As',
+    defaultPath: sourcePdfPath,
+    filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
+  })
+  if (result.canceled || !result.filePath) {
+    return { success: false, cancelled: true }
+  }
+
+  let targetPdfPath = path.resolve(result.filePath)
+  if (!/\.pdf$/i.test(targetPdfPath)) targetPdfPath += '.pdf'
+  const pdfmarkPath = targetPdfPath.replace(/\.pdf$/i, '.pdfmark')
+  const tempPath = pdfmarkPath + '.tmp'
+
+  try {
+    if (targetPdfPath !== path.resolve(sourcePdfPath)) {
+      fs.copyFileSync(sourcePdfPath, targetPdfPath)
+    }
+    fs.writeFileSync(tempPath, JSON.stringify({ ...data, pdfPath: targetPdfPath }, null, 2), 'utf8')
+    fs.renameSync(tempPath, pdfmarkPath)
+
+    // Bring the chat sessions along
+    const sourceChatPath = getPdfchatPath(sourcePdfPath)
+    if (fs.existsSync(sourceChatPath) && targetPdfPath !== path.resolve(sourcePdfPath)) {
+      const chat = JSON.parse(fs.readFileSync(sourceChatPath, 'utf8'))
+      writeJsonAtomic(getPdfchatPath(targetPdfPath), { ...chat, pdfPath: targetPdfPath })
+    }
+  } catch (err) {
+    log.error('Save As failed:', err)
+    dialog.showErrorBox('Save As Failed', err.message)
+    return { success: false, error: err.message }
+  }
+
+  openPdfFile(targetPdfPath)
+  return { success: true, pdfPath: targetPdfPath, pdfmarkPath }
 })
 
 ipcMain.handle('open-file-dialog', async () => {
@@ -378,21 +456,6 @@ ipcMain.handle('copy-pdf-file', async (event, { sourcePath, targetPath }) => {
   }
 })
 
-// Get PDF page count
-ipcMain.handle('get-pdf-page-count', async (event, filePath) => {
-  try {
-    const buffer = fs.readFileSync(filePath)
-    // Count pages by counting /Type /Page entries (simple heuristic)
-    // The renderer will get exact count from PDF.js
-    const content = buffer.toString('binary')
-    const matches = content.match(/\/Type\s*\/Page[^s]/g)
-    return matches ? matches.length : 1
-  } catch (err) {
-    log.error('Failed to get PDF page count:', err)
-    return 0
-  }
-})
-
 // Open PDF directly at a specific path (for drag-drop when no PDF is open)
 ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
   if (filePath && fs.existsSync(filePath)) {
@@ -402,16 +465,137 @@ ipcMain.handle('open-pdf-at-path', async (event, filePath) => {
   return false
 })
 
-// App lifecycle
-app.whenReady().then(() => {
-  createWindow()
+// ---------------------------------------------------------------------------
+// LLM chat
+// ---------------------------------------------------------------------------
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+// Chat sessions live in "<name>.pdfchat" next to the PDF
+function getPdfchatPath(pdfPath) {
+  return pdfPath.replace(/\.pdf$/i, '.pdfchat')
+}
+
+function writeJsonAtomic(filePath, data) {
+  const tempPath = `${filePath}.tmp`
+  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8')
+  fs.renameSync(tempPath, filePath)
+}
+
+ipcMain.handle('chat:load', (event, { pdfPath }) => {
+  const chatPath = getPdfchatPath(pdfPath)
+  if (!fs.existsSync(chatPath)) return { success: true, data: null }
+  try {
+    return { success: true, data: JSON.parse(fs.readFileSync(chatPath, 'utf8')) }
+  } catch (err) {
+    log.error('Failed to load .pdfchat:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('chat:save', (event, { pdfPath, data }) => {
+  try {
+    writeJsonAtomic(getPdfchatPath(pdfPath), data)
+    return { success: true }
+  } catch (err) {
+    log.error('Failed to save .pdfchat:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+// API keys: write-only from the renderer's point of view
+ipcMain.handle('llm:key-status', () => ({
+  keys: secrets.keyStatus(),
+  storage: secrets.storageStatus()
+}))
+
+ipcMain.handle('llm:set-key', (event, { providerId, apiKey }) => {
+  if (!LLM_PROVIDERS[providerId]) return { success: false, error: 'Unknown provider' }
+  try {
+    secrets.setKey(providerId, apiKey)
+    return { success: true, keys: secrets.keyStatus() }
+  } catch (err) {
+    log.error('Failed to store API key:', err)
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
+  try {
+    const models = await listModels({ providerId, baseUrl, apiKey: secrets.getKey(providerId), userAgent: LLM_USER_AGENT })
+    return { success: true, models }
+  } catch (err) {
+    return { success: false, code: err.code || 'unknown', error: err.message }
+  }
+})
+
+// Streaming chat: the renderer picks a requestId and listens for
+// llm:chat-delta / llm:chat-done / llm:chat-error events carrying it.
+const activeChats = new Map()
+
+ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature, sessionId }) => {
+  if (!requestId || activeChats.has(requestId)) return { started: false, error: 'Invalid request id' }
+
+  const controller = new AbortController()
+  activeChats.set(requestId, controller)
+  const sender = event.sender
+  const send = (channel, payload) => {
+    if (!sender.isDestroyed()) sender.send(channel, { requestId, ...payload })
+  }
+
+  streamChat({
+    providerId,
+    baseUrl,
+    apiKey: secrets.getKey(providerId),
+    model,
+    messages,
+    temperature,
+    sessionId,
+    userAgent: LLM_USER_AGENT,
+    signal: controller.signal,
+    onEvent: (e) => {
+      if (e.type === 'delta') send('llm:chat-delta', { content: e.content, reasoning: e.reasoning })
     }
   })
+    .then(result => send('llm:chat-done', result))
+    .catch(err => {
+      if (err.code !== 'aborted') log.warn('Chat request failed:', err.code, err.message)
+      send('llm:chat-error', { code: err.code || 'unknown', message: err.message })
+    })
+    .finally(() => activeChats.delete(requestId))
+
+  return { started: true }
 })
+
+ipcMain.handle('llm:chat-abort', (event, { requestId }) => {
+  const controller = activeChats.get(requestId)
+  if (controller) controller.abort()
+  return { aborted: Boolean(controller) }
+})
+
+// App lifecycle
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+
+if (!gotSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', (event, argv, workingDirectory) => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.focus()
+    }
+    const pdfFile = findPdfArgument(argv, 1, workingDirectory)
+    if (pdfFile) openPdfFile(pdfFile)
+  })
+
+  app.whenReady().then(() => {
+    createWindow()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  })
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
