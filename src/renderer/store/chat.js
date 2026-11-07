@@ -1,8 +1,11 @@
 /**
  * Chat sessions for the open PDF (Vuex module, namespaced as "chat").
  *
- * Sessions are persisted to "<name>.pdfchat" next to the PDF through the
- * chat:load / chat:save IPC handlers. Replies stream from the main process
+ * Two kinds of target:
+ *  - a PDF: sessions are persisted to "<name>.pdfchat" next to the PDF through
+ *    the chat:load / chat:save IPC handlers;
+ *  - a standalone chat: one session in "<name>.chat" in the chats folder
+ *    (chatfile:save), with no document text in the prompt. Replies stream from the main process
  * (llm:chat-start) and arrive through the plugin created by createChatPlugin.
  */
 import { v4 as uuidv4 } from 'uuid'
@@ -10,6 +13,8 @@ import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom 
 import { extractDocumentPages } from '../utils/documentText'
 import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
 import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
+import { chatBaseName } from '../../common/chatFiles'
+import { buildGenerateMessages, extractQmd, formatTranscript, parseCommand } from '../../common/docGen'
 import { activePath, ancestorsOf, normalizeTree, pointersToShow, siblingsOf, subtreeIds } from '../utils/chatTree'
 
 // 1.1.0: messages form a tree (parentId / activeChildId / rootActiveId)
@@ -47,9 +52,18 @@ export function sanitizeSessions(data) {
       modified: s.modified || s.created || now(),
       // null: follow the "Send page images" setting; true/false: per-session override
       visionEnabled: typeof s.visionEnabled === 'boolean' ? s.visionEnabled : null,
+      // null: follow the web tools default for this kind of chat
+      webEnabled: typeof s.webEnabled === 'boolean' ? s.webEnabled : null,
       // Model chosen for this session; null follows the default from Settings
       provider: typeof s.provider === 'string' && LLM_PROVIDERS[s.provider] ? s.provider : null,
       model: typeof s.model === 'string' && s.model ? s.model : null,
+      // /generate history shown in the conversation, and what the document
+      // covered last time (standalone chats)
+      docEvents: Array.isArray(s.docEvents)
+        ? s.docEvents.filter(e => e && typeof e.id === 'string')
+          .map(e => ({ ...e, status: e.status === 'running' ? 'error' : e.status, ...(e.status === 'running' ? { error: 'Interrupted' } : {}) }))
+        : [],
+      document: s.document && typeof s.document === 'object' ? s.document : null,
       // Flat lists from 1.0.0 files become a single chain
       ...normalizeTree(
         s.messages
@@ -67,9 +81,16 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
     state: () => ({
       sessions: [],
       activeSessionId: null,
-      loadedPdfPath: null,
+      // { kind: 'pdf' | 'standalone', path } of what the sessions belong to
+      target: null,
       // { requestId, sessionId, messageId } while a reply is streaming
       streaming: null,
+      // { requestId, sessionId, eventId } while /generate is writing the document
+      generating: null,
+      // Document viewer next to a standalone chat; nonce changes on every /open
+      viewer: { open: false, run: false, nonce: 0 },
+      // Bumped whenever the document file was rewritten
+      docVersion: 0,
       // Phase 4: selection waiting to be attached / contexts for the next message
       pendingContext: null,
       attachedContexts: [],
@@ -108,28 +129,44 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       },
       // Whether the next message in the active session will include page images
       imagesEnabled: (state, getters, rootState) => {
-        if (getters.modelVision === false) return false
+        if (getters.modelVision === false || state.target?.kind === 'standalone') return false
         const override = getters.activeSession?.visionEnabled
         return typeof override === 'boolean' ? override : Boolean(rootState.settings.chat.visionEnabled)
       },
+      isStandalone: (state) => state.target?.kind === 'standalone',
+      // "untitled3" for a standalone chat
+      chatName: (state) => (state.target?.kind === 'standalone' ? chatBaseName(state.target.path) : ''),
+      // Whether the next reply may use web search / fetch
+      webEnabled: (state, getters, rootState) => {
+        if (getters.sessionModelInfo?.tools === false) return false
+        const override = getters.activeSession?.webEnabled
+        if (typeof override === 'boolean') return override
+        const tools = rootState.settings.tools || {}
+        return Boolean(state.target?.kind === 'standalone' ? tools.webStandalone : tools.webPdf)
+      },
       sortedSessions: (state) => [...state.sessions].sort((a, b) => b.modified.localeCompare(a.modified)),
-      isStreaming: (state) => Boolean(state.streaming)
+      isStreaming: (state) => Boolean(state.streaming),
+      isGenerating: (state) => Boolean(state.generating),
+      // True while anything is talking to the model
+      isBusy: (state) => Boolean(state.streaming || state.generating)
     },
 
     mutations: {
       RESET(state) {
         state.sessions = []
         state.activeSessionId = null
-        state.loadedPdfPath = null
+        state.target = null
         state.streaming = null
+        state.generating = null
+        state.viewer = { open: false, run: false, nonce: 0 }
         state.pendingContext = null
         state.attachedContexts = []
         state.status = ''
         state.notice = ''
         state.lastRequest = null
       },
-      SET_SESSIONS(state, { pdfPath, sessions }) {
-        state.loadedPdfPath = pdfPath
+      SET_SESSIONS(state, { target, sessions }) {
+        state.target = target
         state.sessions = sessions
         state.activeSessionId = [...sessions].sort((a, b) => b.modified.localeCompare(a.modified))[0]?.id || null
       },
@@ -145,6 +182,28 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         if (!session) return
         session.provider = providerId || null
         session.model = providerId && model ? model : null
+      },
+      SET_SESSION_WEB(state, { id, value }) {
+        const session = findSession(state, id)
+        if (session) session.webEnabled = value
+      },
+      // Tool activity of a streaming reply: add or update a step by id
+      UPSERT_STEP(state, { sessionId, messageId, step }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (!message) return
+        const steps = message.steps || (message.steps = [])
+        const existing = steps.find(s => s.id === step.id)
+        if (existing) Object.assign(existing, step)
+        else steps.push({ ...step })
+      },
+      // Text streamed before tool calls was only a preamble: drop it
+      RESET_MESSAGE_CONTENT(state, { sessionId, messageId }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (message) message.content = ''
+      },
+      ADD_MESSAGE_NOTICE(state, { sessionId, messageId, notice }) {
+        const message = findMessage(state, sessionId, messageId)
+        if (message && !(message.notices || []).includes(notice)) message.notices = [...(message.notices || []), notice]
       },
       SET_SESSION_VISION(state, { id, value }) {
         const session = findSession(state, id)
@@ -195,6 +254,31 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         for (const m of session.messages) if (remove.has(m.activeChildId)) m.activeChildId = null
         session.modified = now()
       },
+      ADD_DOC_EVENT(state, { sessionId, event }) {
+        const session = findSession(state, sessionId)
+        if (!session) return
+        session.docEvents = [...(session.docEvents || []), event]
+      },
+      UPDATE_DOC_EVENT(state, { sessionId, eventId, patch }) {
+        const event = findSession(state, sessionId)?.docEvents?.find(e => e.id === eventId)
+        if (event) Object.assign(event, patch)
+      },
+      SET_SESSION_DOCUMENT(state, { sessionId, document }) {
+        const session = findSession(state, sessionId)
+        if (session) {
+          session.document = document
+          session.modified = now()
+        }
+      },
+      SET_GENERATING(state, generating) {
+        state.generating = generating
+      },
+      BUMP_DOC_VERSION(state) {
+        state.docVersion++
+      },
+      SET_VIEWER(state, { open, run = false }) {
+        state.viewer = { open, run, nonce: state.viewer.nonce + 1 }
+      },
       SET_STREAMING(state, streaming) {
         state.streaming = streaming
       },
@@ -231,42 +315,80 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
 
     actions: {
       async loadForPdf({ commit, state, dispatch }, pdfPath) {
-        if (state.streaming) await dispatch('stop')
+        if (state.streaming || state.generating) await dispatch('stop')
         commit('RESET')
         if (!pdfPath || !ipcRenderer) return
+        const target = { kind: 'pdf', path: pdfPath }
         const result = await ipcRenderer.invoke('chat:load', { pdfPath })
         if (!result?.success) {
           commit('SET_NOTICE', `Could not read the chat file: ${result?.error || 'unknown error'}`)
-          commit('SET_SESSIONS', { pdfPath, sessions: [] })
+          commit('SET_SESSIONS', { target, sessions: [] })
           return
         }
-        commit('SET_SESSIONS', { pdfPath, sessions: sanitizeSessions(result.data) })
+        commit('SET_SESSIONS', { target, sessions: sanitizeSessions(result.data) })
       },
 
-      async persist({ state, commit }) {
-        if (!state.loadedPdfPath || !ipcRenderer) return
-        const sessions = clone(state.sessions.filter(s => s.messages.length > 0))
+      // A standalone chat: exactly one session, stored in its own .chat file.
+      // data is the parsed file, or null for a new (not yet saved) chat.
+      async loadStandalone({ commit, state, dispatch }, { chatPath, data }) {
+        if (state.streaming || state.generating) await dispatch('stop')
+        commit('RESET')
+        const sessions = sanitizeSessions(data).slice(0, 1)
+        commit('SET_SESSIONS', { target: { kind: 'standalone', path: chatPath }, sessions })
+        if (sessions.length === 0) await dispatch('newSession')
+      },
+
+      // Serializable file contents for the current target
+      snapshot({ state }) {
+        const standalone = state.target?.kind === 'standalone'
+        const sessions = clone(state.sessions.filter(s => standalone || s.messages.length > 0))
         for (const session of sessions) {
           for (const message of session.messages) delete message.pending
         }
-        const result = await ipcRenderer.invoke('chat:save', {
-          pdfPath: state.loadedPdfPath,
-          data: { version: PDFCHAT_VERSION, pdfPath: state.loadedPdfPath, sessions }
-        })
+        return standalone
+          ? { version: PDFCHAT_VERSION, kind: 'standalone', chatPath: state.target.path, sessions }
+          : { version: PDFCHAT_VERSION, pdfPath: state.target?.path, sessions }
+      },
+
+      async persist({ state, commit, dispatch }) {
+        if (!state.target || !ipcRenderer) return
+        const data = await dispatch('snapshot')
+        let result
+        if (state.target.kind === 'standalone') {
+          // Nothing is written for a chat that has not started yet
+          if (!data.sessions.some(s => s.messages.length > 0)) return
+          result = await ipcRenderer.invoke('chatfile:save', { chatPath: state.target.path, data })
+        } else {
+          result = await ipcRenderer.invoke('chat:save', { pdfPath: state.target.path, data })
+        }
         if (!result?.success) commit('SET_NOTICE', `Could not save the chat: ${result?.error || 'unknown error'}`)
       },
 
-      newSession({ commit, getters }) {
+      // Save As for a standalone chat: the main process copies it (and its
+      // document) and then opens the copy
+      async saveAs({ state, dispatch }) {
+        if (state.target?.kind !== 'standalone' || !ipcRenderer) return null
+        if (state.streaming || state.generating) await dispatch('stop')
+        const data = await dispatch('snapshot')
+        return ipcRenderer.invoke('chatfile:save-as', { chatPath: state.target.path, data })
+      },
+
+      newSession({ commit, getters, state }) {
         // Reuse an untouched session instead of piling up empty ones
         if (getters.activeSession && getters.activeSession.messages.length === 0) return getters.activeSession.id
+        // A standalone chat has a single session
+        if (state.target?.kind === 'standalone' && getters.activeSession) return getters.activeSession.id
         const session = {
           id: uuidv4(),
-          title: 'New chat',
+          title: state.target?.kind === 'standalone' ? chatBaseName(state.target.path) : 'New chat',
           created: now(),
           modified: now(),
           visionEnabled: null,
+          webEnabled: null,
           provider: null,
           model: null,
+          docEvents: [],
+          document: null,
           rootActiveId: null,
           messages: []
         }
@@ -293,7 +415,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
 
       async sendMessage({ commit, dispatch, state, getters }, { text }) {
         const input = String(text || '').trim()
-        if (state.streaming || (!input && state.attachedContexts.length === 0)) return false
+        if (state.streaming || state.generating || (!input && state.attachedContexts.length === 0)) return false
 
         if (!getters.sessionModel.model) {
           commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
@@ -303,7 +425,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
 
         const sessionId = getters.activeSession ? getters.activeSession.id : await dispatch('newSession')
         const session = getters.activeSession
-        if (session.messages.length === 0) commit('RENAME_SESSION', { id: sessionId, title: sessionTitleFrom(input || 'Selected context') })
+        if (session.messages.length === 0 && !getters.isStandalone) commit('RENAME_SESSION', { id: sessionId, title: sessionTitleFrom(input || 'Selected context') })
 
         // Continue the visible branch
         const path = activePath(getters.activeSession)
@@ -331,6 +453,11 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const history = ancestorsOf(session, userMessageId)
 
         const llm = rootState.settings.llm
+        const webTools = getters.webEnabled
+        // Tool guidance goes after the (cache-friendly) system prompt
+        const withTools = (template) => (webTools && llm.toolsInstruction
+          ? `${template}\n\n${llm.toolsInstruction}`
+          : template)
         // The session's own model when chosen, else the Settings default
         const providerId = session.provider && session.model ? session.provider : llm.provider
         const model = session.provider && session.model ? session.model : (llm.models?.[llm.provider] || '')
@@ -358,7 +485,23 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         commit('SET_STREAMING', { requestId, sessionId, messageId: assistantMessage.id })
 
         let messages
-        try {
+        if (state.target?.kind === 'standalone') {
+          messages = buildRequestMessages({
+            systemTemplate: withTools(llm.standaloneSystemTemplate),
+            userTemplate: llm.userTemplate,
+            title: chatBaseName(state.target.path),
+            documentText: '',
+            history,
+            userMessage: { input: userMessage.content, contexts: userMessage.contexts }
+          })
+          commit('SET_LAST_REQUEST', {
+            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(m.content), 0),
+            images: 0,
+            truncated: false,
+            includedPages: [],
+            totalPages: 0
+          })
+        } else try {
           commit('SET_STATUS', 'Reading document…')
           const pages = await extractDocumentPages(rootGetters.visiblePages, rootGetters.getPageSource)
           // Pages to keep when the document is too long: attached context and
@@ -399,7 +542,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           })
 
           messages = buildRequestMessages({
-            systemTemplate: llm.systemTemplate,
+            systemTemplate: withTools(llm.systemTemplate),
             userTemplate: llm.userTemplate,
             title: String(rootState.pdfPath || 'document').split(/[\\/]/).pop(),
             documentText: doc.text,
@@ -433,6 +576,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           model,
           messages,
           temperature: llm.temperature,
+          webTools,
           // Stable per conversation: providers such as OpenCode Go route and
           // cache prompts by it
           sessionId
@@ -459,6 +603,11 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       },
 
       async stop({ state, dispatch }) {
+        if (state.generating) {
+          const { requestId } = state.generating
+          if (ipcRenderer) await ipcRenderer.invoke('llm:chat-abort', { requestId })
+          await dispatch('finishGenerate', { requestId, error: { code: 'aborted', message: 'Stopped' } })
+        }
         const streaming = state.streaming
         if (!streaming) return
         if (ipcRenderer) await ipcRenderer.invoke('llm:chat-abort', { requestId: streaming.requestId })
@@ -490,6 +639,14 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         const result = await ipcRenderer.invoke('llm:list-models', { providerId, baseUrl })
         if (result?.success) commit('SET_LLM_MODELS', { providerId, models: result.models }, { root: true })
         return result
+      },
+
+      // Turn web tools on/off for the active session
+      setSessionWeb({ commit, getters, dispatch }, value) {
+        const session = getters.activeSession
+        if (!session) return
+        commit('SET_SESSION_WEB', { id: session.id, value })
+        if (session.messages.length) return dispatch('persist')
       },
 
       // Turn page images on/off for the active session
@@ -587,6 +744,118 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         return dispatch('generateReply', { sessionId: session.id, userMessageId: previous.id })
       },
 
+      // Run a slash command typed in the composer. Returns true when the text
+      // was a command (handled here, never sent to the model).
+      async runCommand({ commit, dispatch, getters }, text) {
+        const command = parseCommand(text)
+        if (!command) return false
+        if (!getters.isStandalone) {
+          commit('SET_NOTICE', `/${command.name} is available in standalone chats (File → New Chat).`)
+          return true
+        }
+        commit('SET_NOTICE', '')
+        if (command.name === 'generate') await dispatch('generateDocument', { steer: command.steer })
+        else if (command.name === 'open') commit('SET_VIEWER', { open: true, run: command.run })
+        else if (command.name === 'close') commit('SET_VIEWER', { open: false })
+        return true
+      },
+
+      // /generate: write "<chat>.qmd" from the visible conversation (and the
+      // current document, if any). This is the only code path that changes
+      // the document.
+      async generateDocument({ commit, dispatch, state, getters, rootState }, { steer = '' } = {}) {
+        const session = getters.activeSession
+        if (!getters.isStandalone || !session || state.streaming || state.generating) return false
+        const { providerId, model } = getters.sessionModel
+        if (!model) {
+          commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
+          return false
+        }
+        const path = activePath(session)
+        if (!path.some(m => m.role === 'assistant' && m.content)) {
+          commit('SET_NOTICE', 'Chat first: /generate turns the conversation into a document.')
+          return false
+        }
+        if (!ipcRenderer) return false
+
+        const event = {
+          id: uuidv4(),
+          kind: 'generate',
+          steer: String(steer || '').trim(),
+          afterMessageId: path[path.length - 1].id,
+          status: 'running',
+          chars: 0,
+          model,
+          created: now()
+        }
+        commit('ADD_DOC_EVENT', { sessionId: session.id, event })
+        const fail = (message) => {
+          commit('UPDATE_DOC_EVENT', { sessionId: session.id, eventId: event.id, patch: { status: 'error', error: message } })
+          commit('SET_GENERATING', null)
+          return dispatch('persist').then(() => false)
+        }
+
+        const current = await ipcRenderer.invoke('doc:read', { chatPath: state.target.path })
+        if (!current?.success) return fail(`Could not read the document: ${current?.error || 'unknown error'}`)
+        const coveredMessageId = current.exists ? session.document?.coveredMessageId || null : null
+        const llm = rootState.settings.llm
+        const messages = buildGenerateMessages({
+          template: llm.generateTemplate,
+          title: getters.chatName,
+          transcript: formatTranscript(path, { coveredMessageId }),
+          currentDocument: current.exists ? current.content : '',
+          steer: event.steer
+        })
+
+        const requestId = uuidv4()
+        commit('SET_GENERATING', { requestId, sessionId: session.id, eventId: event.id, afterMessageId: event.afterMessageId })
+        const started = await ipcRenderer.invoke('llm:chat-start', {
+          requestId,
+          providerId,
+          baseUrl: llm.baseUrls?.[providerId],
+          model,
+          messages,
+          temperature: llm.temperature,
+          webTools: false,
+          sessionId: session.id
+        })
+        if (!started?.started) return fail(started?.error || 'Could not start the request')
+        return true
+      },
+
+      // Called by the IPC plugin when the document request finishes or fails
+      async finishGenerate({ commit, dispatch, state, getters }, { requestId, result, error }) {
+        const generating = state.generating
+        if (!generating || generating.requestId !== requestId) return
+        const { sessionId, eventId, afterMessageId } = generating
+        const patch = (p) => commit('UPDATE_DOC_EVENT', { sessionId, eventId, patch: p })
+        let failure = error ? error.message : null
+        if (!failure && result?.finishReason === 'length') {
+          failure = 'The document was cut off by the model\'s output limit, so it was not saved. Try a model with a longer output or ask for a shorter document.'
+        }
+        if (!failure) {
+          let content
+          try {
+            content = extractQmd(result?.content, getters.chatName || 'Notes')
+          } catch (err) {
+            failure = err.message
+          }
+          if (!failure) {
+            const written = await ipcRenderer.invoke('doc:write', { chatPath: state.target.path, content })
+            if (written?.success) {
+              patch({ status: 'done', chars: content.length, docName: written.docPath.split(/[\\/]/).pop() })
+              commit('SET_SESSION_DOCUMENT', { sessionId, document: { coveredMessageId: afterMessageId, generated: now() } })
+              commit('BUMP_DOC_VERSION')
+            } else {
+              failure = `Could not save the document: ${written?.error || 'unknown error'}`
+            }
+          }
+        }
+        if (failure) patch(error?.code === 'aborted' ? { status: 'cancelled' } : { status: 'error', error: failure })
+        commit('SET_GENERATING', null)
+        await dispatch('persist')
+      },
+
       setFullscreen({ commit }, value) {
         commit('SET_FULLSCREEN', Boolean(value))
       },
@@ -615,9 +884,10 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
  */
 export function createChatPlugin({ ipcRenderer, flushDelayMs = 30 }) {
   return (store) => {
+    // A standalone chat clears the PDF; it loads its own sessions
     store.watch(
       (state) => state.pdfDocument,
-      () => store.dispatch('chat/loadForPdf', store.state.pdfPath)
+      (document) => { if (document) store.dispatch('chat/loadForPdf', store.state.pdfPath) }
     )
 
     if (!ipcRenderer?.on) return
@@ -641,6 +911,18 @@ export function createChatPlugin({ ipcRenderer, flushDelayMs = 30 }) {
     }
 
     ipcRenderer.on('llm:chat-delta', (event, { requestId, content, reasoning }) => {
+      const generating = store.state.chat.generating
+      if (generating && requestId === generating.requestId) {
+        const docEvent = store.getters['chat/activeSession']?.docEvents?.find(e => e.id === generating.eventId)
+        if (content) {
+          store.commit('chat/UPDATE_DOC_EVENT', {
+            sessionId: generating.sessionId,
+            eventId: generating.eventId,
+            patch: { chars: (docEvent?.chars || 0) + content.length }
+          })
+        }
+        return
+      }
       // Late events from a stopped/replaced request
       if (requestId !== store.state.chat.streaming?.requestId) return
       if (buffer.requestId && buffer.requestId !== requestId) flush()
@@ -650,12 +932,31 @@ export function createChatPlugin({ ipcRenderer, flushDelayMs = 30 }) {
       if (!timer) timer = setTimeout(flush, flushDelayMs)
     })
 
+    // Tool steps, preamble resets and notices from the agent loop
+    ipcRenderer.on('llm:chat-activity', (event, { requestId, type, step, message }) => {
+      const streaming = store.state.chat.streaming
+      if (!streaming || requestId !== streaming.requestId) return
+      flush()
+      const target = { sessionId: streaming.sessionId, messageId: streaming.messageId }
+      if (type === 'step') store.commit('chat/UPSERT_STEP', { ...target, step })
+      else if (type === 'reset') store.commit('chat/RESET_MESSAGE_CONTENT', target)
+      else if (type === 'notice') store.commit('chat/ADD_MESSAGE_NOTICE', { ...target, notice: message })
+    })
+
     ipcRenderer.on('llm:chat-done', (event, { requestId, ...result }) => {
+      if (requestId === store.state.chat.generating?.requestId) {
+        store.dispatch('chat/finishGenerate', { requestId, result })
+        return
+      }
       flush()
       store.dispatch('chat/finishStream', { requestId, result })
     })
 
     ipcRenderer.on('llm:chat-error', (event, { requestId, code, message }) => {
+      if (requestId === store.state.chat.generating?.requestId) {
+        store.dispatch('chat/finishGenerate', { requestId, error: { code, message } })
+        return
+      }
       flush()
       store.dispatch('chat/finishStream', { requestId, error: { code, message } })
     })

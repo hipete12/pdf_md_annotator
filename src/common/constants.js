@@ -2,7 +2,10 @@
  * Shared constants and utilities used by both main and renderer processes
  */
 
-import { DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS } from './llm'
+import { DEFAULT_GENERATE_TEMPLATE } from './docGen'
+import {
+  DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, DEFAULT_TOOLS_INSTRUCTION, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS
+} from './llm'
 
 // .pdfmark file format version
 export const PDFMARK_VERSION = '1.0.0'
@@ -60,9 +63,33 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Above this estimated size only the relevant pages are sent
     contextBudgetTokens: 32000,
     systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
-    userTemplate: DEFAULT_USER_TEMPLATE
+    // System prompt for standalone chats (no PDF)
+    standaloneSystemTemplate: DEFAULT_STANDALONE_SYSTEM_TEMPLATE,
+    userTemplate: DEFAULT_USER_TEMPLATE,
+    // Appended to the system prompt when web tools are on
+    toolsInstruction: DEFAULT_TOOLS_INSTRUCTION,
+    // Instruction for /generate ({{title}}, {{conversation}},
+    // {{current_document}}, {{steer}})
+    generateTemplate: DEFAULT_GENERATE_TEMPLATE
+  },
+  // Web tools (Tavily) the model can call during a chat. The Tavily API key
+  // is stored with the other keys (secrets.js, id "tavily").
+  tools: {
+    // Defaults for new sessions; each session can toggle them
+    webStandalone: true,
+    webPdf: false,
+    // Maximum tool calls per reply before the model must answer
+    maxSteps: 6
+  },
+  // Quarto renders the documents written by /generate ('' = find it)
+  quarto: {
+    path: ''
   },
   chat: {
+    // Folder for standalone chats ('' = Documents/PDF Annotator/Chats)
+    chatsFolder: '',
+    // Share of the window used by the document viewer next to a chat
+    docPaneRatio: 0.5,
     panelVisible: false,
     panelWidth: 420,
     // Attach rendered page images for vision-capable models
