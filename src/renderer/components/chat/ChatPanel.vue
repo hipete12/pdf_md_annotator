@@ -1,12 +1,12 @@
 <template>
   <aside
     class="chat-panel"
-    :class="{ fullscreen, resizing }"
-    :style="fullscreen ? null : { width: `${width}px` }"
+    :class="{ fullscreen, resizing, standalone }"
+    :style="fullscreen || standalone ? null : { width: `${width}px` }"
     aria-label="Chat"
   >
     <div
-      v-if="!fullscreen"
+      v-if="!fullscreen && !standalone"
       class="chat-resizer"
       title="Drag to resize"
       @mousedown.prevent="startResize"
@@ -14,7 +14,19 @@
     />
 
     <header class="chat-header">
+      <div
+        v-if="standalone"
+        class="chat-title"
+        :title="chatPath"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        ><path d="M2.5 3.5h11v7H6.5l-3 2.5v-2.5h-1z" /></svg>
+        <span class="chat-session-name">{{ chatName }}</span>
+      </div>
       <button
+        v-else
         class="chat-session-toggle"
         :class="{ open: showSessions }"
         title="Sessions"
@@ -58,9 +70,20 @@
           /><path d="M5 5v6M5 9c0-2 6-1 6-3.5" /></svg>
         </button>
         <button
+          v-if="standalone"
           class="chat-icon-btn"
-          title="New session"
-          @click="newSession"
+          title="Save chat as… (Ctrl+Shift+S)"
+          @click="$emit('save-as')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M3 2.5h8l2 2v9H3z M5.5 2.5v3h4.5v-3 M5.5 13.5v-4h5v4" /></svg>
+        </button>
+        <button
+          class="chat-icon-btn"
+          :title="standalone ? 'New chat (Ctrl+N)' : 'New session'"
+          @click="standalone ? $emit('new-chat') : newSession()"
         >
           <svg
             viewBox="0 0 16 16"
@@ -68,6 +91,7 @@
           ><path d="M8 3.5v9M3.5 8h9" /></svg>
         </button>
         <button
+          v-if="!standalone"
           class="chat-icon-btn"
           :title="fullscreen ? 'Exit full screen (Esc)' : 'Full screen'"
           @click="toggleFullscreen"
@@ -85,7 +109,7 @@
         </button>
         <button
           class="chat-icon-btn"
-          title="Close chat (Ctrl+Shift+L)"
+          :title="standalone ? 'Close chat' : 'Close chat (Ctrl+Shift+L)'"
           @click="$emit('close')"
         >
           <svg
@@ -104,7 +128,7 @@
     />
 
     <ChatSessionList
-      v-if="showSessions"
+      v-if="showSessions && !standalone"
       :sessions="sortedSessions"
       :active-id="activeSessionId"
       @select="selectSession"
@@ -141,12 +165,22 @@
           v-else-if="messages.length === 0"
           class="chat-empty"
         >
-          <p class="chat-empty-title">
-            Ask about {{ documentTitle }}
-          </p>
-          <p class="chat-empty-text">
-            The document's text is included automatically. Select text or click a note to attach it as context.
-          </p>
+          <template v-if="standalone">
+            <p class="chat-empty-title">
+              What would you like to understand?
+            </p>
+            <p class="chat-empty-text">
+              Ask about any concept. Type <code>/generate</code> later to turn the conversation into a Quarto document.
+            </p>
+          </template>
+          <template v-else>
+            <p class="chat-empty-title">
+              Ask about {{ documentTitle }}
+            </p>
+            <p class="chat-empty-text">
+              The document's text is included automatically. Select text or click a note to attach it as context.
+            </p>
+          </template>
           <div class="chat-suggestions">
             <button
               v-for="suggestion in suggestions"
@@ -262,13 +296,13 @@
           v-model="draft"
           class="chat-input"
           rows="1"
-          :placeholder="hasModel ? 'Ask about this document…' : 'Choose a model below or in Settings'"
+          :placeholder="!hasModel ? 'Choose a model below or in Settings' : standalone ? 'Ask anything…  (/ for commands)' : 'Ask about this document…'"
           :disabled="!hasModel"
           @input="autoGrow"
           @keydown="onComposerKeydown"
         />
         <button
-          v-if="hasModel && modelVision !== false"
+          v-if="hasModel && modelVision !== false && !standalone"
           class="chat-vision-toggle"
           :class="{ on: imagesEnabled, unknown: modelVision === null }"
           :title="visionTitle"
@@ -354,9 +388,14 @@ export default {
 
   components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap },
 
-  emits: ['close', 'open-settings'],
+  props: {
+    // Standalone chat (no PDF): fills the window, one session per file
+    standalone: { type: Boolean, default: false }
+  },
 
-  setup() {
+  emits: ['close', 'open-settings', 'new-chat', 'save-as'],
+
+  setup(props) {
     const store = useStore()
     const scroller = ref(null)
     const input = ref(null)
@@ -504,11 +543,19 @@ export default {
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
       (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
 
-    const suggestions = [
-      'Summarize this document',
-      'Explain the key ideas on the current page',
-      'What are the main conclusions?'
-    ]
+    const suggestions = props.standalone
+      ? [
+          'Explain a concept step by step',
+          'Quiz me on what we covered',
+          'What are common misconceptions about this?'
+        ]
+      : [
+          'Summarize this document',
+          'Explain the key ideas on the current page',
+          'What are the main conclusions?'
+        ]
+    const chatName = computed(() => store.getters['chat/chatName'])
+    const chatPath = computed(() => store.state.chatPath)
 
     // --- Sending -----------------------------------------------------------
     const autoGrow = () => {
@@ -722,6 +769,7 @@ export default {
     const tokenTitle = computed(() => {
       const info = lastRequest.value
       if (!info) return ''
+      if (props.standalone) return 'Estimated text size of the last request.'
       const pages = info.truncated
         ? `Pages ${describePageRanges(info.includedPages)} of ${info.totalPages} were included (document text budget reached).`
         : `All ${info.totalPages} pages were included.`
@@ -734,6 +782,8 @@ export default {
     scrollToBottom()
 
     return {
+      chatName,
+      chatPath,
       contextClass,
       contextKindLabel,
       contextLocation,
@@ -819,8 +869,38 @@ export default {
   border-left: none;
 }
 
+.chat-panel.standalone {
+  flex: 1;
+  width: auto;
+  min-width: 320px;
+  border-left: none;
+}
+
+.chat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.chat-title svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
 .chat-panel.fullscreen .chat-messages-inner,
-.chat-panel.fullscreen .chat-composer > * {
+.chat-panel.fullscreen .chat-composer > *,
+.chat-panel.standalone .chat-messages-inner,
+.chat-panel.standalone .chat-composer > * {
   width: 100%;
   max-width: 820px;
   margin-left: auto;

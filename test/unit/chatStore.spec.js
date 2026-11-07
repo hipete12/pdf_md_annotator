@@ -217,7 +217,7 @@ describe('Chat store', () => {
     await tick()
     await tick()
     expect(ipc.lastCall('llm:chat-abort')).to.not.equal(undefined)
-    expect(chat(store).loadedPdfPath).to.equal('/docs/other.pdf')
+    expect(chat(store).target).to.deep.equal({ kind: 'pdf', path: '/docs/other.pdf' })
     expect(chat(store).sessions).to.deep.equal([])
   })
 
@@ -463,5 +463,86 @@ describe('Page navigation state', () => {
     store.commit('SET_PDF_DOCUMENT', { document: fakePdf(['a']), path: '/x.pdf' })
     expect(store.state.viewPage).to.equal(null)
     expect(store.state.scrollRequest).to.equal(null)
+  })
+})
+
+describe('Standalone chats', () => {
+  async function setupStandalone({ data = null } = {}) {
+    const ipc = createFakeIpc({ 'llm:chat-start': () => ({ started: true }) })
+    const store = createAppStore({ ipcRenderer: ipc })
+    store.commit('HYDRATE_SETTINGS', {
+      llm: { provider: 'custom', baseUrls: { custom: 'http://fake/v1' }, models: { custom: 'test-model' } }
+    })
+    await store.dispatch('openStandaloneChat', { chatPath: '/chats/untitled2.chat', data })
+    await tick()
+    return { store, ipc }
+  }
+
+  it('opens a new chat with one session named after the file and writes nothing yet', async () => {
+    const { store, ipc } = await setupStandalone()
+    expect(store.state.mode).to.equal('chat')
+    expect(store.getters['chat/isStandalone']).to.equal(true)
+    expect(store.getters['chat/chatName']).to.equal('untitled2')
+    expect(chat(store).sessions).to.have.length(1)
+    await store.dispatch('chat/persist')
+    expect(ipc.lastCall('chatfile:save')).to.equal(undefined)
+    // Still a single session
+    await store.dispatch('chat/newSession')
+    expect(chat(store).sessions).to.have.length(1)
+  })
+
+  it('sends without document text, keeps the file name and saves to the .chat file', async () => {
+    const { store, ipc } = await setupStandalone()
+    await store.dispatch('chat/sendMessage', { text: 'Explain entropy' })
+    const start = ipc.lastCall('llm:chat-start').payload
+    expect(start.messages[0].content).to.contain('patient tutor')
+    expect(start.messages[0].content).to.not.contain('<document>')
+    expect(start.messages[1]).to.deep.equal({ role: 'user', content: 'Explain entropy' })
+
+    ipc.emit('llm:chat-delta', { requestId: start.requestId, content: 'Entropy is…' })
+    ipc.emit('llm:chat-done', { requestId: start.requestId })
+    await tick(50)
+    const saved = ipc.lastCall('chatfile:save').payload
+    expect(saved.chatPath).to.equal('/chats/untitled2.chat')
+    expect(saved.data.kind).to.equal('standalone')
+    expect(saved.data.sessions[0].title).to.equal('untitled2')
+    expect(saved.data.sessions[0].messages.map(m => m.content)).to.deep.equal(['Explain entropy', 'Entropy is…'])
+  })
+
+  it('reopens a saved chat and leaves the PDF state empty', async () => {
+    const data = {
+      version: '1.1.0',
+      kind: 'standalone',
+      sessions: [{ id: 's9', title: 'notes', created: '2026-01-01T00:00:00Z', messages: [{ id: 'm1', role: 'user', content: 'hi', parentId: null }] }]
+    }
+    const { store } = await setupStandalone({ data })
+    expect(chat(store).activeSessionId).to.equal('s9')
+    expect(store.getters['chat/activeMessages'].map(m => m.content)).to.deep.equal(['hi'])
+    expect(store.state.pdfDocument).to.equal(null)
+  })
+
+  it('opening a PDF afterwards switches back to PDF mode and its sessions', async () => {
+    const { store, ipc } = await setupStandalone()
+    ipc.handlers['chat:load'] = () => ({ success: true, data: null })
+    store.commit('SET_PDF_DOCUMENT', { document: fakePdf(['a']), path: '/docs/a.pdf' })
+    await tick()
+    await tick()
+    expect(store.state.mode).to.equal('pdf')
+    expect(chat(store).target).to.deep.equal({ kind: 'pdf', path: '/docs/a.pdf' })
+  })
+
+  it('Save As sends the current chat to the main process', async () => {
+    const { store, ipc } = await setupStandalone()
+    ipc.handlers['chatfile:save-as'] = () => ({ success: true, chatPath: '/chats/physics.chat' })
+    const result = await store.dispatch('chat/saveAs')
+    expect(result.chatPath).to.equal('/chats/physics.chat')
+    expect(ipc.lastCall('chatfile:save-as').payload.chatPath).to.equal('/chats/untitled2.chat')
+  })
+
+  it('closing goes back to the welcome screen', async () => {
+    const { store } = await setupStandalone()
+    await store.dispatch('closeWorkspace')
+    expect(store.state.mode).to.equal(null)
+    expect(chat(store).target).to.equal(null)
   })
 })

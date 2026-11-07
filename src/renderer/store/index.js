@@ -51,6 +51,23 @@ function snapshotPdfmark(state, commit) {
 }
 
 /**
+ * Destroy the loaded PDF.js documents to free worker/memory resources.
+ * destroy() can throw if a document was already destroyed or is mid-load.
+ */
+function releasePdfDocuments(state) {
+  const docs = [state.pdfDocument, ...Object.values(state.additionalPdfs || {})]
+  for (const doc of docs) {
+    if (doc && typeof doc.destroy === 'function') {
+      try {
+        doc.destroy()
+      } catch (e) {
+        // Best-effort cleanup
+      }
+    }
+  }
+}
+
+/**
  * Create a new store instance. Tests pass a fake ipcRenderer; the app uses the
  * default store exported below.
  */
@@ -70,6 +87,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
     plugins: [createChatPlugin({ ipcRenderer })],
     
     state: () => ({
+      // What the window shows: null (welcome screen), 'pdf' or 'chat'
+      // (a standalone chat, see chatPath)
+      mode: null,
+      chatPath: null,
+    
       // PDF state
       pdfPath: null,
       pdfDocument: null,
@@ -189,28 +211,9 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
 
     mutations: {
       SET_PDF_DOCUMENT(state, { document, path }) {
-        // Destroy previous PDF document and additional PDFs to free worker/memory resources.
-        // Only destroy if the object exists and exposes a destroy() method; wrap in try/catch
-        // because destroy can throw if the document was already destroyed or is mid-load.
-        if (state.pdfDocument && typeof state.pdfDocument.destroy === 'function') {
-          try {
-            state.pdfDocument.destroy()
-          } catch (e) {
-            // Best-effort cleanup; ignore errors from already-destroyed documents
-          }
-        }
-        if (state.additionalPdfs) {
-          for (const doc of Object.values(state.additionalPdfs)) {
-            if (doc && typeof doc.destroy === 'function') {
-              try {
-                doc.destroy()
-              } catch (e) {
-                // Best-effort cleanup
-              }
-            }
-          }
-        }
-
+        releasePdfDocuments(state)
+        state.mode = 'pdf'
+        state.chatPath = null
         // Use markRaw to prevent Vue's Proxy from wrapping the PDF document
         // PDF.js uses private class fields (#) which don't work through Proxy
         state.pdfDocument = markRaw(document)
@@ -225,6 +228,31 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
         state.viewPage = null
         state.scrollRequest = null
         state.pdfmarkCreated = null
+        state.isDirty = false
+      },
+    
+      // Leave the PDF (if any) and show a standalone chat, or the welcome
+      // screen when chatPath is null
+      SHOW_STANDALONE(state, chatPath) {
+        releasePdfDocuments(state)
+        state.mode = chatPath ? 'chat' : null
+        state.chatPath = chatPath
+        state.pdfDocument = null
+        state.pdfPath = null
+        state.pageCount = 0
+        state.pageOrder = []
+        state.deletedPages = []
+        state.annotations = {}
+        state.concatenatedPdfs = []
+        state.additionalPdfs = {}
+        state.selectedAnnotation = null
+        state.selectedPages = []
+        state.currentPage = 1
+        state.viewPage = null
+        state.scrollRequest = null
+        state.pdfmarkCreated = null
+        state.undoStack = []
+        state.redoStack = []
         state.isDirty = false
       },
     
@@ -582,6 +610,19 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
           console.error('Failed to save as:', err)
           return { success: false, error: err.message }
         }
+      },
+    
+      // Open a standalone chat (from the main process 'open-chat' event)
+      async openStandaloneChat({ commit, dispatch }, { chatPath, data }) {
+        commit('SHOW_STANDALONE', chatPath)
+        await dispatch('chat/loadStandalone', { chatPath, data })
+      },
+    
+      // Back to the welcome screen
+      async closeWorkspace({ commit, dispatch, state }) {
+        if (state.chat.streaming) await dispatch('chat/stop')
+        commit('SHOW_STANDALONE', null)
+        commit('chat/RESET')
       },
     
       loadPdfmark({ commit }, data) {

@@ -2,7 +2,7 @@
  * Shared constants and utilities used by both main and renderer processes
  */
 
-import { DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS } from './llm'
+import { DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, DEFAULT_USER_TEMPLATE, LLM_PROVIDERS } from './llm'
 
 // .pdfmark file format version
 export const PDFMARK_VERSION = '1.0.0'
@@ -60,6 +60,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     // Above this estimated size only the relevant pages are sent
     contextBudgetTokens: 32000,
     systemTemplate: DEFAULT_SYSTEM_TEMPLATE,
+    // System prompt for standalone chats (no PDF)
+    standaloneSystemTemplate: DEFAULT_STANDALONE_SYSTEM_TEMPLATE,
     userTemplate: DEFAULT_USER_TEMPLATE
   },
   chat: {

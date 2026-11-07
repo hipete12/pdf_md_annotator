@@ -22,8 +22,26 @@
       ▶
     </button>
     
+    <!-- Standalone chat: the chat fills the window -->
+    <div
+      v-if="mode === 'chat'"
+      class="chat-workspace"
+    >
+      <ChatPanel
+        :key="chatPath"
+        standalone
+        @close="closeWorkspace"
+        @open-settings="openSettings"
+        @new-chat="newChat"
+        @save-as="saveChatAs"
+      />
+    </div>
+
     <!-- Main content -->
-    <div class="main-content">
+    <div
+      v-else
+      class="main-content"
+    >
       <!-- Toolbar -->
       <Toolbar 
         v-if="pdfDocument"
@@ -45,6 +63,8 @@
       <WelcomeScreen 
         v-else
         @open-file="openFile"
+        @new-chat="newChat"
+        @open-recent="openRecent"
       />
     </div>
     
@@ -126,6 +146,8 @@ export default {
     
     // Computed properties
     const pdfDocument = computed(() => store.state.pdfDocument)
+    const mode = computed(() => store.state.mode)
+    const chatPath = computed(() => store.state.chatPath)
     const sidebarVisible = computed(() => store.state.sidebarVisible)
     const settingsModalOpen = computed(() => store.state.settingsModalOpen)
     const settings = computed(() => store.state.settings)
@@ -166,6 +188,19 @@ export default {
     const openFile = async () => {
       if (!ipcRenderer) return
       await ipcRenderer.invoke('open-file-dialog')
+    }
+    
+    // Standalone chats: the main process picks the file and sends 'open-chat'
+    const newChat = async () => {
+      if (ipcRenderer) await ipcRenderer.invoke('chatfile:new')
+    }
+    const openRecent = async (filePath) => {
+      if (ipcRenderer) await ipcRenderer.invoke('open-path', filePath)
+    }
+    const saveChatAs = () => store.dispatch('chat/saveAs')
+    const closeWorkspace = () => store.dispatch('closeWorkspace')
+    const handleOpenChat = (event, payload) => {
+      store.dispatch('openStandaloneChat', payload)
     }
     
     const loadPdf = async (filePath, annotations) => {
@@ -269,11 +304,13 @@ export default {
     }
     
     const handleSaveFile = () => {
-      store.dispatch('savePdfmark', { commit: true })
+      if (mode.value === 'chat') store.dispatch('chat/persist')
+      else store.dispatch('savePdfmark', { commit: true })
     }
     
     const handleSaveFileAs = () => {
-      store.dispatch('savePdfmarkAs')
+      if (mode.value === 'chat') store.dispatch('chat/saveAs')
+      else store.dispatch('savePdfmarkAs')
     }
     
     const handleToggleSidebar = () => {
@@ -290,6 +327,10 @@ export default {
     // Ctrl+L: attach the current selection (PDF text, reply or selected note)
     // to the next chat message, opening the chat first if needed
     const handleAttachSelection = async () => {
+      if (mode.value === 'chat') {
+        window.dispatchEvent(new Event('chat:attach-selection'))
+        return
+      }
       if (!pdfDocument.value) return
       if (!chatVisible.value) {
         toggleChat()
@@ -306,6 +347,7 @@ export default {
       // Register IPC listeners (only if in Electron)
       if (ipcRenderer) {
         ipcRenderer.on('open-pdf', handleOpenPdf)
+        ipcRenderer.on('open-chat', handleOpenChat)
         ipcRenderer.on('save-file', handleSaveFile)
         ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
@@ -329,6 +371,7 @@ export default {
     onUnmounted(() => {
       if (ipcRenderer) {
         ipcRenderer.removeListener('open-pdf', handleOpenPdf)
+        ipcRenderer.removeListener('open-chat', handleOpenChat)
         ipcRenderer.removeListener('save-file', handleSaveFile)
         ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
@@ -609,13 +652,26 @@ export default {
       openFile,
       handleDrop,
       chatVisible,
-      toggleChat
+      toggleChat,
+      mode,
+      chatPath,
+      newChat,
+      openRecent,
+      saveChatAs,
+      closeWorkspace
     }
   }
 }
 </script>
 
 <style scoped>
+.chat-workspace {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  height: 100%;
+}
+
 .sidebar-expand-btn {
   position: fixed;
   left: 0;
