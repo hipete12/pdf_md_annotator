@@ -2,12 +2,14 @@
  * Helpers for context chips (snippets attached to a chat message): labels,
  * locations, and turning a selection in a rendered reply back into text.
  *
- * Kinds: 'text' (PDF text), 'note' (user note), 'reply' (earlier assistant reply).
- * Each kind has a colour; the global classes ctx-text / ctx-note / ctx-reply
+ * Kinds: 'text' (PDF text), 'note' (user note), 'reply' (earlier assistant reply),
+ * 'report' (text from the rendered /generate document).
+ * Each kind has a colour; the global classes ctx-text / ctx-note / ctx-reply / ctx-report
  * (styles/main.css) set the CSS variable --ctx accordingly.
  */
 
-const KIND_LABELS = { text: 'Text', note: 'Note', reply: 'Reply' }
+const MAX_SECTION_CHARS = 32
+const KIND_LABELS = { text: 'Text', note: 'Note', reply: 'Reply', report: 'Report' }
 
 /** Short kind label shown on a chip ("Selection" for a pending PDF selection). */
 export function contextKindLabel(context, { pending = false } = {}) {
@@ -15,9 +17,17 @@ export function contextKindLabel(context, { pending = false } = {}) {
   return KIND_LABELS[context?.kind] || 'Text'
 }
 
-/** Where the snippet came from: "p. 3" for PDF text and notes, "turn 2" for replies. */
+/**
+ * Where the snippet came from: "p. 3" for PDF text and notes, "turn 2" for
+ * replies, the section heading for report text.
+ */
 export function contextLocation(context) {
   if (context?.kind === 'reply') return context.turn ? `turn ${context.turn}` : 'reply'
+  if (context?.kind === 'report') {
+    // Long headings would squeeze out the snippet itself
+    const section = String(context.section || '')
+    return section.length > MAX_SECTION_CHARS ? `${section.slice(0, MAX_SECTION_CHARS - 1)}…` : section
+  }
   return context?.page ? `p. ${context.page}` : ''
 }
 

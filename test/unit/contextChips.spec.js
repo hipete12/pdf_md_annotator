@@ -17,6 +17,23 @@ describe('context chips', () => {
     expect(contextClass({ kind: 'weird' })).to.equal('ctx-text')
   })
 
+  it('labels report text by its section, shortening long headings', () => {
+    expect(contextKindLabel({ kind: 'report' }, { pending: true })).to.equal('Report')
+    expect(contextClass({ kind: 'report' })).to.equal('ctx-report')
+    expect(contextLocation({ kind: 'report', section: 'Key ideas' })).to.equal('Key ideas')
+    expect(contextLocation({ kind: 'report' })).to.equal('')
+    const long = contextLocation({ kind: 'report', section: 'A very long section heading that goes on and on' })
+    expect(long).to.have.length(32)
+    expect(long.endsWith('…')).to.equal(true)
+  })
+
+  it('formats report contexts in the prompt with their section', () => {
+    expect(formatSelections([{ kind: 'report', section: 'Key ideas', sectionId: 'key-ideas', text: 'Entropy $S$ grows.' }]))
+      .to.equal('<selected_context>\n[section "Key ideas", generated document excerpt]\nEntropy $S$ grows.\n</selected_context>')
+    expect(formatSelections([{ kind: 'report', text: 'x' }]))
+      .to.equal('<selected_context>\n[generated document excerpt]\nx\n</selected_context>')
+  })
+
   it('formats reply contexts in the prompt with their turn', () => {
     expect(formatSelections([{ kind: 'reply', turn: 2, text: 'The model uses attention.' }]))
       .to.equal('<selected_context>\n[turn 2, your earlier reply]\nThe model uses attention.\n</selected_context>')

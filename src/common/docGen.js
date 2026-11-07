@@ -66,7 +66,7 @@ export function parseCommand(text) {
   return rest ? null : { name }
 }
 
-const KIND_LABELS = { text: 'PDF excerpt', note: 'note', reply: 'quoted reply' }
+const KIND_LABELS = { text: 'PDF excerpt', note: 'note', reply: 'quoted reply', report: 'quoted from the document' }
 
 /**
  * The conversation as plain text for the document prompt.

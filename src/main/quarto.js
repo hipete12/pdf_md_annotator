@@ -200,7 +200,8 @@ function decodeDataUrl(url) {
 // Runs first inside the sandboxed viewer frame. The frame has an opaque
 // origin, so storage APIs throw: give Quarto's scripts in-memory stand-ins.
 // Web links are opened through window.open, which the main process hands to
-// the system browser.
+// the system browser. Selected text is posted to the app (attached to the chat
+// as a "Report" chip), and the app can ask to scroll to a section.
 const VIEWER_BRIDGE = `<script>(function () {
   function memoryStorage() {
     var data = {};
@@ -228,6 +229,75 @@ const VIEWER_BRIDGE = `<script>(function () {
       window.open(link.href, '_blank', 'noopener');
     }
   }, true);
+
+  // --- Selections for the chat ---
+  // Plain text of a range: formulas become their TeX source (pandoc's MathML
+  // keeps it in an annotation), copy buttons are dropped, and line breaks
+  // come from layout (innerText) measured off-screen.
+  function rangeText(range) {
+    var box = document.createElement('div');
+    box.appendChild(range.cloneContents());
+    var maths = box.querySelectorAll('math');
+    for (var i = 0; i < maths.length; i++) {
+      var tex = maths[i].querySelector('annotation[encoding="application/x-tex"]');
+      if (!tex) continue;
+      var src = tex.textContent.trim();
+      var block = maths[i].getAttribute('display') === 'block';
+      maths[i].parentNode.replaceChild(document.createTextNode(block ? '\\n$$' + src + '$$\\n' : '$' + src + '$'), maths[i]);
+    }
+    var junk = box.querySelectorAll('button, script, style, annotation, .anchorjs-link');
+    for (var j = 0; j < junk.length; j++) junk[j].parentNode.removeChild(junk[j]);
+    var ancestor = range.commonAncestorContainer;
+    if (ancestor.nodeType !== 1) ancestor = ancestor.parentNode;
+    var inPre = ancestor && ancestor.closest && ancestor.closest('pre');
+    box.style.cssText = 'position:fixed;left:-99999px;top:0;white-space:' + (inPre ? 'pre' : 'normal') + ';';
+    document.body.appendChild(box);
+    var text = typeof box.innerText === 'string' ? box.innerText : box.textContent;
+    document.body.removeChild(box);
+    return text.replace(/[ \\t]+\\n/g, '\\n').replace(/\\n{3,}/g, '\\n\\n').trim();
+  }
+  // Nearest section (Quarto wraps each heading in <section id>) and its title
+  function sectionOf(node) {
+    var el = node && node.nodeType !== 1 ? node.parentNode : node;
+    var section = el && el.closest ? el.closest('section[id]') : null;
+    if (!section) return { id: '', title: '' };
+    var heading = section.querySelector('h1, h2, h3, h4, h5, h6');
+    var title = '';
+    if (heading) {
+      var copy = heading.cloneNode(true);
+      var links = copy.querySelectorAll('.anchorjs-link');
+      for (var k = 0; k < links.length; k++) links[k].parentNode.removeChild(links[k]);
+      title = copy.textContent.replace(/\\s+/g, ' ').trim();
+    }
+    return { id: section.id, title: title };
+  }
+  function sendSelection() {
+    var selection = window.getSelection();
+    if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+    var range = selection.getRangeAt(0);
+    var text = rangeText(range);
+    if (!text) return;
+    var section = sectionOf(range.startContainer);
+    parent.postMessage({ source: 'pdfmd-viewer', type: 'selection', text: text, sectionId: section.id, section: section.title }, '*');
+  }
+  var timer = null;
+  document.addEventListener('selectionchange', function () {
+    clearTimeout(timer);
+    timer = setTimeout(sendSelection, 250);
+  });
+  // A finished drag or keyboard selection is sent at once, so Ctrl+L right
+  // after selecting attaches it
+  document.addEventListener('mouseup', function () { setTimeout(sendSelection, 0); });
+  document.addEventListener('keyup', function (event) { if (event.shiftKey) sendSelection(); });
+
+  window.addEventListener('message', function (event) {
+    var data = event.data;
+    if (event.source !== parent || !data || data.source !== 'pdfmd-app') return;
+    if (data.type === 'reveal') {
+      var target = data.sectionId && document.getElementById(data.sectionId);
+      if (target) target.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  });
 })();</script>`
 
 /**

@@ -22,7 +22,7 @@
         :key="context.id || context.text"
         class="chat-context-ref"
         :class="contextClass(context)"
-        :title="context.kind === 'reply' ? 'Go to the quoted reply' : `Go to page ${context.page}`"
+        :title="context.kind === 'reply' ? 'Go to the quoted reply' : context.kind === 'report' ? 'Show in the document' : `Go to page ${context.page}`"
         @click="$emit('open-context', context)"
       >
         <span class="chat-context-ref-kind">{{ contextKindLabel(context) }}</span>

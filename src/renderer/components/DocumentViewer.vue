@@ -73,6 +73,7 @@
         title="Rendered document"
         sandbox="allow-scripts allow-popups"
         :srcdoc="html"
+        @load="onFrameLoad"
       />
 
       <div
@@ -129,7 +130,7 @@
 </template>
 
 <script>
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useStore } from 'vuex'
 
 let ipcRenderer = null
@@ -156,6 +157,7 @@ export default {
     const rendering = ref(false)
     const runRequested = ref(false)
     const error = ref(null)
+    const frame = ref(null)
     let renderId = 0
 
     const viewer = computed(() => store.state.chat.viewer)
@@ -204,6 +206,49 @@ export default {
       if (viewer.value.open) render(false)
     })
 
+    // --- Selections for the chat --------------------------------------------
+    // The frame's bridge script (prepareForViewer) posts selected text; it is
+    // handed to the chat panel as a "Report" chip. Only messages from this
+    // frame count, and only the expected fields are passed on.
+    const MAX_SELECTION_CHARS = 20000
+    const onMessage = (event) => {
+      const data = event.data
+      if (!frame.value || event.source !== frame.value.contentWindow) return
+      if (!data || data.source !== 'pdfmd-viewer' || data.type !== 'selection') return
+      if (typeof data.text !== 'string' || !data.text.trim()) return
+      window.dispatchEvent(new CustomEvent('chat:report-selection', {
+        detail: {
+          text: data.text.slice(0, MAX_SELECTION_CHARS),
+          section: typeof data.section === 'string' ? data.section.slice(0, 200) : '',
+          sectionId: typeof data.sectionId === 'string' ? data.sectionId.slice(0, 200) : ''
+        }
+      }))
+    }
+
+    // Clicking a Report chip scrolls to its section, once the page has loaded
+    let frameLoaded = false
+    let pendingReveal = null
+    const postReveal = (sectionId) => {
+      frame.value?.contentWindow?.postMessage({ source: 'pdfmd-app', type: 'reveal', sectionId }, '*')
+    }
+    const onReveal = (event) => {
+      const sectionId = event.detail?.sectionId
+      if (!sectionId) return
+      if (frameLoaded && !rendering.value) postReveal(sectionId)
+      else pendingReveal = sectionId
+    }
+    const onFrameLoad = () => {
+      frameLoaded = true
+      if (pendingReveal) postReveal(pendingReveal)
+      pendingReveal = null
+    }
+    watch(html, () => { frameLoaded = false })
+
+    onMounted(() => {
+      window.addEventListener('message', onMessage)
+      window.addEventListener('chat:report-reveal', onReveal)
+    })
+
     // --- Resizing (share of the window, saved in settings) -----------------
     const ratio = ref(store.state.settings.chat.docPaneRatio || DEFAULT_RATIO)
     const clamp = (value) => Math.min(MAX_RATIO, Math.max(MIN_RATIO, value))
@@ -231,12 +276,14 @@ export default {
       save()
     }
     onUnmounted(() => {
+      window.removeEventListener('message', onMessage)
+      window.removeEventListener('chat:report-reveal', onReveal)
       if (document.body.classList.contains('doc-resizing')) stopResize()
       if (rendering.value) cancel()
     })
 
     return {
-      html, docName, ranCode, rendering, runRequested, error, errorTitle,
+      html, docName, ranCode, rendering, runRequested, error, errorTitle, frame, onFrameLoad,
       render, cancel, close, ratio, startResize, resetRatio
     }
   }

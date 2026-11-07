@@ -24,7 +24,7 @@ export function fillTemplate(template, vars) {
 }
 
 // Explained to the model in the default system prompt (DEFAULT_SYSTEM_TEMPLATE)
-const CONTEXT_KIND_LABELS = { text: 'PDF excerpt', note: "user's note", reply: 'your earlier reply' }
+const CONTEXT_KIND_LABELS = { text: 'PDF excerpt', note: "user's note", reply: 'your earlier reply', report: 'generated document excerpt' }
 
 /**
  * Format attached contexts for {{selections}}; empty string when none.
@@ -36,7 +36,9 @@ export function formatSelections(contexts) {
     const label = CONTEXT_KIND_LABELS[c.kind] || c.kind
     const where = c.kind === 'reply'
       ? (c.turn ? `turn ${c.turn}, ` : '')
-      : (c.page ? `p. ${c.page}, ` : '')
+      : c.kind === 'report'
+        ? (c.section ? `section "${c.section}", ` : '')
+        : (c.page ? `p. ${c.page}, ` : '')
     return `[${where}${label}]\n${String(c.text || '').trim()}`
   })
   return `<selected_context>\n${entries.join('\n\n')}\n</selected_context>`

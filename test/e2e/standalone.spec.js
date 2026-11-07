@@ -251,4 +251,75 @@ test.describe('Standalone chat', () => {
     await window.press('.chat-input', 'Enter')
     await expect(window.locator('.doc-viewer')).toHaveCount(0)
   })
+
+  test('text selected in the rendered document can be attached to the chat', async () => {
+    test.setTimeout(180000)
+    const { findQuarto } = require('../../src/main/quarto')
+    test.skip(!(await findQuarto('', { refresh: true })), 'Quarto is not installed')
+    await app.close()
+    fake.server.close()
+    const qmd = [
+      '---', 'title: "Entropy notes"', '---', '',
+      '## Key ideas', '', 'Entropy $S = k \\ln W$ measures disorder.', '',
+      '## Examples', '',
+      ...Array.from({ length: 60 }, (_, i) => `Example ${i + 1}: ice melting.\n`)
+    ].join('\n')
+    fake = await startFakeLlm((body, i) => (i === 1 ? qmd : 'Entropy measures disorder.'))
+    ;({ app, window, tempDir } = await launchWithSettings((dir) => {
+      chats = path.join(dir, 'chats')
+      return {
+        llm: { provider: 'custom', baseUrls: { custom: fake.baseUrl }, models: { custom: 'fake-model' } },
+        chat: { chatsFolder: chats },
+        tools: { webStandalone: false }
+      }
+    }))
+    await window.getByRole('button', { name: /New chat/ }).click()
+    await window.fill('.chat-input', 'Explain entropy')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-send.stop')).toHaveCount(0)
+    await window.fill('.chat-input', '/generate')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.doc-event.done')).toBeVisible()
+    await window.fill('.chat-input', '/open')
+    await window.press('.chat-input', 'Enter')
+
+    const frame = window.frameLocator('.doc-frame')
+    const paragraph = frame.locator('p', { hasText: 'measures disorder' })
+    await expect(paragraph).toBeVisible({ timeout: 90000 })
+    // Select the paragraph inside the frame: it becomes a pending Report chip
+    await paragraph.evaluate((el) => {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      getSelection().removeAllRanges()
+      getSelection().addRange(range)
+    })
+    const pending = window.locator('.chat-chip.pending')
+    await expect(pending).toHaveClass(/ctx-report/)
+    await expect(pending.locator('.chat-chip-kind')).toHaveText('Report')
+    await expect(pending.locator('.chat-chip-page')).toHaveText('Key ideas')
+    await expect(pending.locator('.chat-chip-text')).toHaveText('Entropy $S = k \\ln W$ measures disorder.')
+    // Its colour differs from the other kinds
+    const colours = await window.evaluate(() => {
+      const css = getComputedStyle(document.documentElement)
+      return ['text', 'note', 'reply', 'report'].map(k => css.getPropertyValue(`--context-${k}`).trim())
+    })
+    expect(new Set(colours).size).toBe(4)
+    await window.screenshot({ path: path.join(__dirname, '../../test-results/report-selection.png') })
+
+    await pending.click()
+    await expect(window.locator('.chat-chip.attached.ctx-report')).toBeVisible()
+    await window.fill('.chat-input', 'Why the logarithm?')
+    await window.press('.chat-input', 'Enter')
+    await expect(window.locator('.chat-send.stop')).toHaveCount(0)
+    const request = fake.chatRequests()[2]
+    const last = request.messages[request.messages.length - 1].content
+    expect(last).toContain('[section "Key ideas", generated document excerpt]\nEntropy $S = k \\ln W$ measures disorder.')
+    expect(request.messages[0].content).toContain('"generated document excerpt"')
+
+    // Clicking the sent chip scrolls the document back to its section
+    await frame.locator('p', { hasText: 'Example 60:' }).scrollIntoViewIfNeeded()
+    await expect(frame.locator('#key-ideas h2')).not.toBeInViewport()
+    await window.locator('.chat-context-ref.ctx-report').click()
+    await expect(frame.locator('#key-ideas h2')).toBeInViewport()
+  })
 })

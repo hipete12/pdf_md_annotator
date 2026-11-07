@@ -170,7 +170,7 @@
               What would you like to understand?
             </p>
             <p class="chat-empty-text">
-              Ask about any concept. Type <code>/generate</code> later to turn the conversation into a Quarto document.
+              Ask about any concept. Type <code>/generate</code> later to turn the conversation into a Quarto document, and <code>/open</code> to read it; text you select there can be attached as context.
             </p>
           </template>
           <template v-else>
@@ -487,6 +487,19 @@ export default {
     const isAttached = (candidate) => attachedContexts.value.some(c => c.kind === candidate.kind && c.text === candidate.text &&
       (c.pageId ?? null) === (candidate.pageId ?? null) && (c.messageId ?? null) === (candidate.messageId ?? null))
 
+    // Text selected in the rendered document (DocumentViewer's frame) becomes
+    // a "Report" chip; the frame posts it, so it arrives as an event
+    const onReportSelection = (event) => {
+      const { text: raw, section, sectionId } = event.detail || {}
+      const text = clip(String(raw || '').trim())
+      if (!text) return
+      const pending = pendingContext.value
+      if (pending?.kind === 'report' && pending.text === text && pending.sectionId === sectionId) return
+      if (isAttached({ kind: 'report', text })) return
+      store.dispatch('chat/setPendingContext', { kind: 'report', section, sectionId, text })
+    }
+    window.addEventListener('chat:report-selection', onReportSelection)
+
     // Text selected in an assistant reply becomes a "Reply" chip
     const captureReplySelection = (selection, answer) => {
       const messageId = answer.closest('[data-message-id]')?.dataset.messageId
@@ -790,6 +803,12 @@ export default {
           ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
         return
       }
+      if (context.kind === 'report') {
+        // Show the rendered document (opening it if needed) at the section
+        if (!chat.value.viewer.open) store.commit('chat/SET_VIEWER', { open: true })
+        nextTick(() => window.dispatchEvent(new CustomEvent('chat:report-reveal', { detail: { sectionId: context.sectionId } })))
+        return
+      }
       if (context.pageId) store.commit('REQUEST_PAGE_SCROLL', context.pageId)
       if (context.kind === 'note' && context.noteId) store.dispatch('selectAnnotation', context.noteId)
       if (fullscreen.value) store.dispatch('chat/setFullscreen', false)
@@ -867,6 +886,7 @@ export default {
     onUnmounted(() => {
       document.removeEventListener('selectionchange', onSelectionChange)
       window.removeEventListener('chat:attach-selection', attachSelectionNow)
+      window.removeEventListener('chat:report-selection', onReportSelection)
       clearTimeout(selectionTimer)
       window.removeEventListener('resize', onWindowResize)
       if (resizing.value) stopResize()

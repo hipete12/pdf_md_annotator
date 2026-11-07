@@ -126,4 +126,51 @@ describe('prepareForViewer', () => {
     expect(out.indexOf('memoryStorage')).to.be.below(out.indexOf('<meta charset'))
     expect(out).to.not.contain('src="data:application/javascript')
   })
+
+  describe('selection bridge', () => {
+    const { JSDOM } = require('jsdom')
+    // Pandoc's MathML keeps the TeX source in an annotation
+    const math = (tex, block) => `<math display="${block ? 'block' : 'inline'}"><semantics><mi>S</mi>` +
+      `<annotation encoding="application/x-tex">${tex}</annotation></semantics></math>`
+    const load = (body) => {
+      const html = prepareForViewer(`<html><head></head><body>${body}</body></html>`)
+      const dom = new JSDOM(html, { runScripts: 'dangerously' })
+      const posted = []
+      dom.window.addEventListener('message', (event) => posted.push(event.data))
+      return { dom, posted }
+    }
+    const select = (dom, node) => {
+      const range = dom.window.document.createRange()
+      range.selectNodeContents(node)
+      const selection = dom.window.getSelection()
+      selection.removeAllRanges()
+      selection.addRange(range)
+      dom.window.document.dispatchEvent(new dom.window.Event('mouseup'))
+    }
+    const settle = () => new Promise(resolve => setTimeout(resolve, 20))
+
+    it('posts selected text with formulas as TeX and the section heading', async () => {
+      const { dom, posted } = load(
+        '<section id="key-ideas" class="level2"><h2>Key ideas <a class="anchorjs-link">#</a></h2>' +
+        `<p id="p">Entropy ${math('S = k \\ln W')} measures disorder.</p>${math('\\Delta S \\ge 0', true)}</section>`
+      )
+      select(dom, dom.window.document.getElementById('key-ideas'))
+      await settle()
+      const message = posted.find(m => m.type === 'selection')
+      expect(message).to.include({ source: 'pdfmd-viewer', sectionId: 'key-ideas', section: 'Key ideas' })
+      expect(message.text).to.contain('Entropy $S = k \\ln W$ measures disorder.')
+      expect(message.text).to.contain('$$\\Delta S \\ge 0$$')
+      expect(message.text).to.not.contain('#')
+    })
+
+    it('ignores empty selections and works outside sections', async () => {
+      const { dom, posted } = load('<p id="p">Plain text</p><p id="e"></p>')
+      select(dom, dom.window.document.getElementById('e'))
+      await settle()
+      expect(posted.filter(m => m.type === 'selection')).to.have.length(0)
+      select(dom, dom.window.document.getElementById('p'))
+      await settle()
+      expect(posted.find(m => m.type === 'selection')).to.include({ text: 'Plain text', sectionId: '', section: '' })
+    })
+  })
 })
