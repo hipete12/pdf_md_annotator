@@ -64,6 +64,15 @@ export const DEFAULT_SETTINGS = Object.freeze({
     standaloneSystemTemplate: DEFAULT_STANDALONE_SYSTEM_TEMPLATE,
     userTemplate: DEFAULT_USER_TEMPLATE
   },
+  // Web tools (Tavily) the model can call during a chat. The Tavily API key
+  // is stored with the other keys (secrets.js, id "tavily").
+  tools: {
+    // Defaults for new sessions; each session can toggle them
+    webStandalone: true,
+    webPdf: false,
+    // Maximum tool calls per reply before the model must answer
+    maxSteps: 6
+  },
   chat: {
     // Folder for standalone chats ('' = Documents/PDF Annotator/Chats)
     chatsFolder: '',

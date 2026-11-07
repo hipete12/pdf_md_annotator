@@ -10,7 +10,8 @@ const { LLM_PROVIDERS } = require('../common/llm')
 const {
   isPdfFile, isChatFile, chatBaseName, docPathFor, withChatExtension, nextUntitledName, CHAT_EXTENSION
 } = require('../common/chatFiles')
-const { listModels, streamChat } = require('./llm')
+const { listModels } = require('./llm')
+const { runAgent } = require('./agent')
 const { createSecrets } = require('./secrets')
 
 // Initialize store for settings. User settings live under the top-level keys
@@ -522,8 +523,11 @@ ipcMain.handle('llm:key-status', () => ({
   storage: secrets.storageStatus()
 }))
 
+// Secrets that can be stored: one key per LLM provider, plus Tavily (web tools)
+const SECRET_IDS = new Set([...Object.keys(LLM_PROVIDERS), 'tavily'])
+
 ipcMain.handle('llm:set-key', (event, { providerId, apiKey }) => {
-  if (!LLM_PROVIDERS[providerId]) return { success: false, error: 'Unknown provider' }
+  if (!SECRET_IDS.has(providerId)) return { success: false, error: 'Unknown provider' }
   try {
     secrets.setKey(providerId, apiKey)
     return { success: true, keys: secrets.keyStatus() }
@@ -543,10 +547,11 @@ ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
 })
 
 // Streaming chat: the renderer picks a requestId and listens for
-// llm:chat-delta / llm:chat-done / llm:chat-error events carrying it.
+// llm:chat-delta / llm:chat-activity / llm:chat-done / llm:chat-error events
+// carrying it. With webTools the reply runs as an agent loop (agent.js).
 const activeChats = new Map()
 
-ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature, sessionId }) => {
+ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature, sessionId, webTools }) => {
   if (!requestId || activeChats.has(requestId)) return { started: false, error: 'Invalid request id' }
 
   const controller = new AbortController()
@@ -556,18 +561,29 @@ ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model
     if (!sender.isDestroyed()) sender.send(channel, { requestId, ...payload })
   }
 
-  streamChat({
-    providerId,
-    baseUrl,
-    apiKey: secrets.getKey(providerId),
-    model,
+  const tavilyKey = webTools ? secrets.getKey('tavily') : ''
+  if (webTools && !tavilyKey) {
+    send('llm:chat-activity', { type: 'notice', message: 'Web search is off: add a Tavily API key in Settings → AI Chat.' })
+  }
+
+  runAgent({
+    chat: {
+      providerId,
+      baseUrl,
+      apiKey: secrets.getKey(providerId),
+      model,
+      temperature,
+      sessionId,
+      userAgent: LLM_USER_AGENT,
+      signal: controller.signal
+    },
     messages,
-    temperature,
-    sessionId,
-    userAgent: LLM_USER_AGENT,
-    signal: controller.signal,
+    webTools: Boolean(webTools && tavilyKey),
+    maxSteps: Math.min(20, Math.max(1, parseInt(store.get('tools.maxSteps'), 10) || 6)),
+    toolOptions: { apiKey: tavilyKey },
     onEvent: (e) => {
       if (e.type === 'delta') send('llm:chat-delta', { content: e.content, reasoning: e.reasoning })
+      else send('llm:chat-activity', e)
     }
   })
     .then(result => send('llm:chat-done', result))
