@@ -873,6 +873,12 @@ ipcMain.handle('get-recent-files', () => store.get('recentFiles', []).map(filePa
 
 ipcMain.handle('get-chats-folder', () => resolveChatsFolder())
 
+// Back on the welcome screen
+ipcMain.handle('window:reset-title', () => {
+  currentPdfPath = null
+  mainWindow?.setTitle('PDF Annotator')
+})
+
 // App lifecycle
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 

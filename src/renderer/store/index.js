@@ -613,7 +613,9 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
       },
     
       // Open a standalone chat (from the main process 'open-chat' event)
-      async openStandaloneChat({ commit, dispatch }, { chatPath, data }) {
+      async openStandaloneChat({ commit, dispatch, state }, { chatPath, data }) {
+        // Write pending note edits (auto-save file) before leaving the PDF
+        if (state.pdfPath && state.isDirty) await dispatch('savePdfmark', { commit: false })
         commit('SHOW_STANDALONE', chatPath)
         await dispatch('chat/loadStandalone', { chatPath, data })
       },
@@ -621,8 +623,10 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
       // Back to the welcome screen
       async closeWorkspace({ commit, dispatch, state }) {
         if (state.chat.streaming || state.chat.generating) await dispatch('chat/stop')
+        if (state.pdfPath && state.isDirty) await dispatch('savePdfmark', { commit: false })
         commit('SHOW_STANDALONE', null)
         commit('chat/RESET')
+        if (ipcRenderer) await ipcRenderer.invoke('window:reset-title')
       },
     
       loadPdfmark({ commit }, data) {

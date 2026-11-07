@@ -697,3 +697,16 @@ describe('/generate', () => {
     expect(store.getters['chat/isGenerating']).to.equal(false)
   })
 })
+
+describe('Leaving a PDF for a chat', () => {
+  it('writes pending note edits to the auto-save file first', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('createAnnotation', { pageIndex: 1, x: 10, y: 10 })
+    expect(store.state.isDirty).to.equal(true)
+    await store.dispatch('openStandaloneChat', { chatPath: '/chats/untitled1.chat', data: null })
+    const saved = ipc.lastCall('save-pdfmark')
+    expect(saved.payload.pdfPath).to.equal('/docs/paper.pdf')
+    expect(Object.values(saved.payload.data.annotations).flat()).to.have.length(1)
+    expect(ipc.lastCall('commit-pdfmark')).to.equal(undefined)
+  })
+})
