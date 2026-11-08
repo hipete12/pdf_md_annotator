@@ -213,6 +213,9 @@
         
         <!-- AI chat (provider, model, vision, prompt templates) -->
         <AiChatSettings />
+
+        <!-- Web search, standalone chats, documents -->
+        <ChatToolsSettings />
         
         <!-- UI Settings -->
         <div class="settings-section">
@@ -261,11 +264,12 @@ import { ref, computed } from 'vue'
 import { useStore } from 'vuex'
 import { createDefaultSettings } from '../../common/constants'
 import AiChatSettings from './AiChatSettings.vue'
+import ChatToolsSettings from './ChatToolsSettings.vue'
 
 export default {
   name: 'SettingsModal',
   
-  components: { AiChatSettings },
+  components: { AiChatSettings, ChatToolsSettings },
   
   emits: ['close'],
   

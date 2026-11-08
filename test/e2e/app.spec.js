@@ -68,10 +68,9 @@ test.describe('Application Launch', () => {
     await expect(welcomeTitle).toBeVisible()
     await expect(welcomeTitle).toHaveText('PDF Annotator')
     
-    // Check for open button
-    const openButton = await window.locator('.btn-primary')
-    await expect(openButton).toBeVisible()
-    await expect(openButton).toHaveText('Open PDF File')
+    // Open a PDF or start a chat
+    await expect(window.locator('.welcome-card', { hasText: 'Open PDF' })).toBeVisible()
+    await expect(window.locator('.welcome-card', { hasText: 'New chat' })).toBeVisible()
   })
   
   test('should have correct window title', async () => {

@@ -3,7 +3,9 @@
  */
 
 import { createAppStore } from '../../src/renderer/store'
-import { DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_SYSTEM_TEMPLATES } from '../../src/common/llm'
+import {
+  DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_STANDALONE_SYSTEM_TEMPLATES, PREVIOUS_SYSTEM_TEMPLATES
+} from '../../src/common/llm'
 
 // Records every ipcRenderer.invoke call so save behaviour can be asserted
 const createMockIpc = () => {
@@ -539,6 +541,13 @@ describe('System prompt upgrade', () => {
     const store = createTestStore()
     store.commit('HYDRATE_SETTINGS', { llm: { systemTemplate: PREVIOUS_SYSTEM_TEMPLATES[0] } })
     expect(store.state.settings.llm.systemTemplate).to.equal(DEFAULT_SYSTEM_TEMPLATE)
+  })
+
+  it('upgrades an unmodified previous standalone prompt', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { llm: { standaloneSystemTemplate: PREVIOUS_STANDALONE_SYSTEM_TEMPLATES[0] } })
+    expect(store.state.settings.llm.standaloneSystemTemplate).to.equal(DEFAULT_STANDALONE_SYSTEM_TEMPLATE)
+    expect(DEFAULT_STANDALONE_SYSTEM_TEMPLATE).to.contain('generated document excerpt')
   })
 
   it('keeps a customised prompt', () => {

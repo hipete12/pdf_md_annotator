@@ -21,6 +21,7 @@
   --context-text: #2563eb;
   --context-note: #d97706;
   --context-reply: #7c3aed;
+  --context-report: #0d9488;
 }
 
 /* Dark theme */
@@ -35,6 +36,7 @@
   --context-text: #60a5fa;
   --context-note: #fbbf24;
   --context-reply: #a78bfa;
+  --context-report: #2dd4bf;
 }
 
 * {
@@ -877,3 +879,4 @@ body {
 .ctx-text { --ctx: var(--context-text); }
 .ctx-note { --ctx: var(--context-note); }
 .ctx-reply { --ctx: var(--context-reply); }
+.ctx-report { --ctx: var(--context-report); }

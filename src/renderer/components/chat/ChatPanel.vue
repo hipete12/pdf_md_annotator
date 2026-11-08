@@ -1,12 +1,12 @@
 <template>
   <aside
     class="chat-panel"
-    :class="{ fullscreen, resizing }"
-    :style="fullscreen ? null : { width: `${width}px` }"
+    :class="{ fullscreen, resizing, standalone }"
+    :style="fullscreen || standalone ? null : { width: `${width}px` }"
     aria-label="Chat"
   >
     <div
-      v-if="!fullscreen"
+      v-if="!fullscreen && !standalone"
       class="chat-resizer"
       title="Drag to resize"
       @mousedown.prevent="startResize"
@@ -14,7 +14,19 @@
     />
 
     <header class="chat-header">
+      <div
+        v-if="standalone"
+        class="chat-title"
+        :title="chatPath"
+      >
+        <svg
+          viewBox="0 0 16 16"
+          aria-hidden="true"
+        ><path d="M2.5 3.5h11v7H6.5l-3 2.5v-2.5h-1z" /></svg>
+        <span class="chat-session-name">{{ chatName }}</span>
+      </div>
       <button
+        v-else
         class="chat-session-toggle"
         :class="{ open: showSessions }"
         title="Sessions"
@@ -58,9 +70,20 @@
           /><path d="M5 5v6M5 9c0-2 6-1 6-3.5" /></svg>
         </button>
         <button
+          v-if="standalone"
           class="chat-icon-btn"
-          title="New session"
-          @click="newSession"
+          title="Save chat as… (Ctrl+Shift+S)"
+          @click="$emit('save-as')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M3 2.5h8l2 2v9H3z M5.5 2.5v3h4.5v-3 M5.5 13.5v-4h5v4" /></svg>
+        </button>
+        <button
+          class="chat-icon-btn"
+          :title="standalone ? 'New chat (Ctrl+N)' : 'New session'"
+          @click="standalone ? $emit('new-chat') : newSession()"
         >
           <svg
             viewBox="0 0 16 16"
@@ -68,6 +91,7 @@
           ><path d="M8 3.5v9M3.5 8h9" /></svg>
         </button>
         <button
+          v-if="!standalone"
           class="chat-icon-btn"
           :title="fullscreen ? 'Exit full screen (Esc)' : 'Full screen'"
           @click="toggleFullscreen"
@@ -85,7 +109,7 @@
         </button>
         <button
           class="chat-icon-btn"
-          title="Close chat (Ctrl+Shift+L)"
+          :title="standalone ? 'Close chat' : 'Close chat (Ctrl+Shift+L)'"
           @click="$emit('close')"
         >
           <svg
@@ -104,7 +128,7 @@
     />
 
     <ChatSessionList
-      v-if="showSessions"
+      v-if="showSessions && !standalone"
       :sessions="sortedSessions"
       :active-id="activeSessionId"
       @select="selectSession"
@@ -141,12 +165,22 @@
           v-else-if="messages.length === 0"
           class="chat-empty"
         >
-          <p class="chat-empty-title">
-            Ask about {{ documentTitle }}
-          </p>
-          <p class="chat-empty-text">
-            The document's text is included automatically. Select text or click a note to attach it as context.
-          </p>
+          <template v-if="standalone">
+            <p class="chat-empty-title">
+              What would you like to understand?
+            </p>
+            <p class="chat-empty-text">
+              Ask about any concept. Type <code>/generate</code> later to turn the conversation into a Quarto document, and <code>/open</code> to read it; text you select there can be attached as context.
+            </p>
+          </template>
+          <template v-else>
+            <p class="chat-empty-title">
+              Ask about {{ documentTitle }}
+            </p>
+            <p class="chat-empty-text">
+              The document's text is included automatically. Select text or click a note to attach it as context.
+            </p>
+          </template>
           <div class="chat-suggestions">
             <button
               v-for="suggestion in suggestions"
@@ -159,10 +193,12 @@
           </div>
         </div>
 
-        <ChatMessage
+        <template
           v-for="(message, index) in messages"
           :key="message.id"
-          :message="message"
+        >
+          <ChatMessage
+            :message="message"
           :is-last="index === messages.length - 1"
           :editing="editingId === message.id"
           :locked="isStreaming"
@@ -176,7 +212,15 @@
           @switch-branch="switchBranch(message.id, $event)"
           @delete-branch="deleteBranch(message.id)"
           @open-context="openContext"
-        />
+          />
+          <ChatDocEvent
+            v-for="event in docEventsAfter(message.id)"
+            :key="event.id"
+            :event="event"
+            :is-latest="event.id === latestDocEventId"
+            @open="runCommandText('/open')"
+          />
+        </template>
       </div>
     </div>
 
@@ -253,6 +297,24 @@
           </button>
         </div>
       </div>
+      <ul
+        v-if="commandSuggestions.length"
+        class="chat-commands"
+        role="listbox"
+        aria-label="Commands"
+      >
+        <li
+          v-for="(command, i) in commandSuggestions"
+          :key="command.name"
+          role="option"
+          :aria-selected="i === commandIndex"
+          :class="{ active: i === commandIndex }"
+          @mousedown.prevent="applyCommand(command)"
+        >
+          <code>{{ command.usage }}</code>
+          <span>{{ command.description }}</span>
+        </li>
+      </ul>
       <div
         class="chat-input-wrap"
         :class="{ disabled: !hasModel }"
@@ -262,13 +324,30 @@
           v-model="draft"
           class="chat-input"
           rows="1"
-          :placeholder="hasModel ? 'Ask about this document…' : 'Choose a model below or in Settings'"
+          :placeholder="!hasModel ? 'Choose a model below or in Settings' : standalone ? 'Ask anything…  (/ for commands)' : 'Ask about this document…'"
           :disabled="!hasModel"
           @input="autoGrow"
           @keydown="onComposerKeydown"
         />
         <button
-          v-if="hasModel && modelVision !== false"
+          v-if="hasModel && modelTools !== false"
+          class="chat-vision-toggle chat-web-toggle"
+          :class="{ on: webEnabled }"
+          :title="webTitle"
+          :aria-pressed="webEnabled"
+          @click="toggleWeb"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><circle
+            cx="8"
+            cy="8"
+            r="5.5"
+          /><path d="M2.5 8h11M8 2.5c-2 2.2-2 8.8 0 11M8 2.5c2 2.2 2 8.8 0 11" /></svg>
+        </button>
+        <button
+          v-if="hasModel && modelVision !== false && !standalone"
           class="chat-vision-toggle"
           :class="{ on: imagesEnabled, unknown: modelVision === null }"
           :title="visionTitle"
@@ -343,6 +422,8 @@ import ChatMessage from './ChatMessage.vue'
 import ChatSessionList from './ChatSessionList.vue'
 import ChatModelPicker from './ChatModelPicker.vue'
 import ChatBranchMap from './ChatBranchMap.vue'
+import ChatDocEvent from './ChatDocEvent.vue'
+import { listCommands, parseCommand } from '../../../common/docGen'
 import { describePageRanges } from '../../utils/chatPrompt'
 import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
 
@@ -352,11 +433,16 @@ const DEFAULT_WIDTH = 420
 export default {
   name: 'ChatPanel',
 
-  components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap },
+  components: { ChatMessage, ChatSessionList, ChatModelPicker, ChatBranchMap, ChatDocEvent },
 
-  emits: ['close', 'open-settings'],
+  props: {
+    // Standalone chat (no PDF): fills the window, one session per file
+    standalone: { type: Boolean, default: false }
+  },
 
-  setup() {
+  emits: ['close', 'open-settings', 'new-chat', 'save-as'],
+
+  setup(props) {
     const store = useStore()
     const scroller = ref(null)
     const input = ref(null)
@@ -370,7 +456,8 @@ export default {
     const sortedSessions = computed(() => store.getters['chat/sortedSessions'])
     // Visible branch of the session's conversation tree
     const messages = computed(() => store.getters['chat/activeMessages'])
-    const isStreaming = computed(() => store.getters['chat/isStreaming'])
+    // Busy while a reply streams or /generate writes the document
+    const isStreaming = computed(() => store.getters['chat/isBusy'])
     const fullscreen = computed(() => chat.value.fullscreen)
     const status = computed(() => chat.value.status)
     const notice = computed(() => chat.value.notice)
@@ -399,6 +486,19 @@ export default {
     // (e.g. a PDF selection still active after a note was clicked)
     const isAttached = (candidate) => attachedContexts.value.some(c => c.kind === candidate.kind && c.text === candidate.text &&
       (c.pageId ?? null) === (candidate.pageId ?? null) && (c.messageId ?? null) === (candidate.messageId ?? null))
+
+    // Text selected in the rendered document (DocumentViewer's frame) becomes
+    // a "Report" chip; the frame posts it, so it arrives as an event
+    const onReportSelection = (event) => {
+      const { text: raw, section, sectionId } = event.detail || {}
+      const text = clip(String(raw || '').trim())
+      if (!text) return
+      const pending = pendingContext.value
+      if (pending?.kind === 'report' && pending.text === text && pending.sectionId === sectionId) return
+      if (isAttached({ kind: 'report', text })) return
+      store.dispatch('chat/setPendingContext', { kind: 'report', section, sectionId, text })
+    }
+    window.addEventListener('chat:report-selection', onReportSelection)
 
     // Text selected in an assistant reply becomes a "Reply" chip
     const captureReplySelection = (selection, answer) => {
@@ -501,14 +601,29 @@ export default {
     })
     const toggleImages = () => store.dispatch('chat/setSessionVision', !imagesEnabled.value)
 
+    // Web tools (Tavily) for this session
+    const webEnabled = computed(() => store.getters['chat/webEnabled'])
+    const modelTools = computed(() => store.getters['chat/sessionModelInfo']?.tools ?? null)
+    const webTitle = computed(() => `Web search for this session: ${webEnabled.value ? 'on' : 'off'}. ` +
+      `${modelTools.value === null ? 'This model does not report tool support. ' : ''}Click to turn ${webEnabled.value ? 'off' : 'on'}.`)
+    const toggleWeb = () => store.dispatch('chat/setSessionWeb', !webEnabled.value)
+
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
       (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
 
-    const suggestions = [
-      'Summarize this document',
-      'Explain the key ideas on the current page',
-      'What are the main conclusions?'
-    ]
+    const suggestions = props.standalone
+      ? [
+          'Explain a concept step by step',
+          'Quiz me on what we covered',
+          'What are common misconceptions about this?'
+        ]
+      : [
+          'Summarize this document',
+          'Explain the key ideas on the current page',
+          'What are the main conclusions?'
+        ]
+    const chatName = computed(() => store.getters['chat/chatName'])
+    const chatPath = computed(() => store.state.chatPath)
 
     // --- Sending -----------------------------------------------------------
     const autoGrow = () => {
@@ -518,8 +633,47 @@ export default {
       el.style.height = `${Math.min(el.scrollHeight, 200)}px`
     }
 
+    // --- Slash commands (standalone chats) ----------------------------------
+    const commandIndex = ref(0)
+    const commandsDismissed = ref(false)
+    watch(draft, () => {
+      commandIndex.value = 0
+      commandsDismissed.value = false
+    })
+    const commandSuggestions = computed(() => {
+      if (!props.standalone || commandsDismissed.value) return []
+      const value = draft.value
+      if (!value.startsWith('/') || value.includes('\n')) return []
+      const typed = value.slice(1)
+      // Hide once the user is typing the /generate instructions
+      if (/^generate\s+\S/i.test(typed)) return []
+      return listCommands(value)
+    })
+    const applyCommand = (command) => {
+      draft.value = command.name === 'generate' ? '/generate ' : `/${command.name}`
+      nextTick(() => input.value?.focus())
+    }
+    const docEvents = computed(() => activeSession.value?.docEvents || [])
+    const docEventsAfter = (messageId) => docEvents.value.filter(e => e.afterMessageId === messageId)
+    const latestDocEventId = computed(() => [...docEvents.value].reverse().find(e => e.status === 'done')?.id || null)
+    const runCommandText = async (text) => {
+      stickToBottom.value = true
+      return store.dispatch('chat/runCommand', text)
+    }
+
     const send = async (text) => {
       const content = text ?? draft.value
+      // Commands are handled by the app, never sent to the model
+      if (parseCommand(content)) {
+        if (isStreaming.value) return
+        if (text === undefined) {
+          draft.value = ''
+          await nextTick()
+          autoGrow()
+        }
+        await runCommandText(content)
+        return
+      }
       if (!hasModel.value || isStreaming.value) return
       if (!content.trim() && chat.value.attachedContexts.length === 0) return
       if (text === undefined) {
@@ -540,9 +694,34 @@ export default {
     // Enter sends, Shift+Enter is a newline; ignore Enter while an IME
     // (Chinese/Japanese/Korean input) is still composing
     const onComposerKeydown = (event) => {
+      const suggestions = commandSuggestions.value
+      if (suggestions.length && !event.isComposing) {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          const step = event.key === 'ArrowDown' ? 1 : -1
+          commandIndex.value = (commandIndex.value + step + suggestions.length) % suggestions.length
+          return
+        }
+        if (event.key === 'Tab') {
+          event.preventDefault()
+          applyCommand(suggestions[commandIndex.value])
+          return
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          event.stopPropagation()
+          commandsDismissed.value = true
+          return
+        }
+      }
       if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return
       if (event.isComposing || event.keyCode === 229) return
       event.preventDefault()
+      // "/gen" + Enter completes the highlighted command first
+      if (suggestions.length && !parseCommand(draft.value)) {
+        applyCommand(suggestions[commandIndex.value])
+        return
+      }
       send()
     }
 
@@ -624,6 +803,12 @@ export default {
           ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
         return
       }
+      if (context.kind === 'report') {
+        // Show the rendered document (opening it if needed) at the section
+        if (!chat.value.viewer.open) store.commit('chat/SET_VIEWER', { open: true })
+        nextTick(() => window.dispatchEvent(new CustomEvent('chat:report-reveal', { detail: { sectionId: context.sectionId } })))
+        return
+      }
       if (context.pageId) store.commit('REQUEST_PAGE_SCROLL', context.pageId)
       if (context.kind === 'note' && context.noteId) store.dispatch('selectAnnotation', context.noteId)
       if (fullscreen.value) store.dispatch('chat/setFullscreen', false)
@@ -701,6 +886,7 @@ export default {
     onUnmounted(() => {
       document.removeEventListener('selectionchange', onSelectionChange)
       window.removeEventListener('chat:attach-selection', attachSelectionNow)
+      window.removeEventListener('chat:report-selection', onReportSelection)
       clearTimeout(selectionTimer)
       window.removeEventListener('resize', onWindowResize)
       if (resizing.value) stopResize()
@@ -722,6 +908,7 @@ export default {
     const tokenTitle = computed(() => {
       const info = lastRequest.value
       if (!info) return ''
+      if (props.standalone) return 'Estimated text size of the last request.'
       const pages = info.truncated
         ? `Pages ${describePageRanges(info.includedPages)} of ${info.totalPages} were included (document text budget reached).`
         : `All ${info.totalPages} pages were included.`
@@ -734,6 +921,18 @@ export default {
     scrollToBottom()
 
     return {
+      chatName,
+      chatPath,
+      commandSuggestions,
+      commandIndex,
+      applyCommand,
+      docEventsAfter,
+      latestDocEventId,
+      runCommandText,
+      webEnabled,
+      modelTools,
+      webTitle,
+      toggleWeb,
       contextClass,
       contextKindLabel,
       contextLocation,
@@ -819,8 +1018,72 @@ export default {
   border-left: none;
 }
 
+.chat-panel.standalone {
+  flex: 1;
+  width: auto;
+  min-width: 320px;
+  border-left: none;
+}
+
+.chat-commands {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--annotation-bg);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+}
+
+.chat-commands li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.chat-commands li.active,
+.chat-commands li:hover {
+  background: var(--sidebar-bg);
+  color: var(--text-color);
+}
+
+.chat-commands code {
+  flex: none;
+  min-width: 170px;
+  font-family: 'Consolas', monospace;
+  color: var(--primary-color);
+}
+
+.chat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.chat-title svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+
 .chat-panel.fullscreen .chat-messages-inner,
-.chat-panel.fullscreen .chat-composer > * {
+.chat-panel.fullscreen .chat-composer > *,
+.chat-panel.standalone .chat-messages-inner,
+.chat-panel.standalone .chat-composer > * {
   width: 100%;
   max-width: 820px;
   margin-left: auto;

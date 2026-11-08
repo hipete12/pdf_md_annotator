@@ -139,11 +139,13 @@ async function listModels({ providerId, baseUrl, apiKey, userAgent, timeoutMs = 
  * @param {number} [params.temperature]
  * @param {string} [params.sessionId] - stable id of the conversation (sent when the provider needs it)
  * @param {string} [params.userAgent]
+ * @param {Array} [params.tools] - OpenAI-format tool definitions
+ * @param {string} [params.toolChoice] - e.g. 'none' to forbid tool calls
  * @param {AbortSignal} [params.signal]
  * @param {(event: object) => void} params.onEvent - receives parser events
- * @returns {Promise<{ content: string, reasoning: string, model: string|null, usage: object|null, finishReason: string|null }>}
+ * @returns {Promise<{ content: string, reasoning: string, model: string|null, usage: object|null, finishReason: string|null, toolCalls: Array<{id: string, name: string, arguments: string}> }>}
  */
-async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, sessionId, userAgent, signal, onEvent }) {
+async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, sessionId, userAgent, tools, toolChoice, signal, onEvent }) {
   const provider = getProvider(providerId)
   if (provider.requiresKey && !apiKey) {
     throw new LlmError({ code: 'auth', message: `Add your ${provider.label} API key in Settings` })
@@ -155,6 +157,10 @@ async function streamChat({ providerId, baseUrl, apiKey, model, messages, temper
 
   const body = { model, messages, stream: true }
   if (typeof temperature === 'number') body.temperature = temperature
+  if (Array.isArray(tools) && tools.length) {
+    body.tools = tools
+    if (toolChoice) body.tool_choice = toolChoice
+  }
 
   const response = await request(provider, baseUrl, joinUrl(baseUrl, 'chat/completions'), {
     method: 'POST',
@@ -163,7 +169,8 @@ async function streamChat({ providerId, baseUrl, apiKey, model, messages, temper
     signal
   })
 
-  const result = { content: '', reasoning: '', model: null, usage: null, finishReason: null }
+  const result = { content: '', reasoning: '', model: null, usage: null, finishReason: null, toolCalls: [] }
+  const callsByIndex = new Map()
   let streamError = null
   const parser = createSseParser((event) => {
     if (event.type === 'delta') {
@@ -173,6 +180,16 @@ async function streamChat({ providerId, baseUrl, apiKey, model, messages, temper
       result.model = event.model || result.model
       result.usage = event.usage || result.usage
       result.finishReason = event.finishReason || result.finishReason
+    } else if (event.type === 'tool_call') {
+      let call = callsByIndex.get(event.index)
+      if (!call) {
+        call = { id: '', name: '', arguments: '' }
+        callsByIndex.set(event.index, call)
+      }
+      if (event.id) call.id = event.id
+      // The name arrives whole in the first piece (some servers repeat it)
+      if (event.name && !call.name) call.name = event.name
+      call.arguments += event.arguments
     } else if (event.type === 'error') {
       streamError = event.message
     }
@@ -191,6 +208,10 @@ async function streamChat({ providerId, baseUrl, apiKey, model, messages, temper
   }
 
   if (streamError) throw new LlmError({ code: 'stream', message: streamError })
+  result.toolCalls = [...callsByIndex.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([index, call]) => ({ ...call, id: call.id || `call_${index}` }))
+    .filter(call => call.name)
   return result
 }
 
