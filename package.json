@@ -43,7 +43,7 @@
     "copy-webpack-plugin": "^12.0.2",
     "css-loader": "^6.10.0",
     "electron": "^28.2.0",
-    "electron-builder": "^24.9.1",
+    "electron-builder": "^26.18.0",
     "eslint": "^8.56.0",
     "eslint-plugin-vue": "^9.21.1",
     "html-webpack-plugin": "^5.6.0",
@@ -97,10 +97,12 @@
       "synopsis": "PDF viewer and annotator with Markdown and LaTeX support",
       "description": "View and annotate PDFs with Markdown and LaTeX support.",
       "desktop": {
-        "Name": "PDF Annotator",
-        "Comment": "View and annotate PDF documents",
-        "Keywords": "pdf;annotate;markdown;latex;",
-        "StartupWMClass": "PDF Annotator"
+        "entry": {
+          "Name": "PDF Annotator",
+          "Comment": "View and annotate PDF documents",
+          "Keywords": "pdf;annotate;markdown;latex;",
+          "StartupWMClass": "PDF Annotator"
+        }
       }
     },
     "appImage": {

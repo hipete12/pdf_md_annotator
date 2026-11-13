@@ -218,12 +218,12 @@ export function renderMarkdown(text, options = {}) {
   // Display math: $$...$$ and \[...\]
   text = text.replace(/\$\$([\s\S]+?)\$\$/g, (match, math) => addMath(math, true))
   text = text.replace(/\\\[([\s\S]+?)\\\]/g, (match, math) => addMath(math, true))
-  // Inline math: \(...\) and $...$ (skipping currency like "$5 and $10")
+  // Inline math: \(...\) and $...$. Pandoc's rule tells math from prices:
+  // the opening $ is followed by a non-space, the closing $ follows a
+  // non-space and is not followed by a digit. So "$0.5$" is math, while
+  // "$5 and $10" and "$5-$10" stay text.
   text = text.replace(/\\\(([\s\S]+?)\\\)/g, (match, math) => addMath(math, false))
-  text = text.replace(/\$([^$\n]+?)\$/g, (match, math) => {
-    if (/^\d/.test(math.trim())) return match
-    return addMath(math, false)
-  })
+  text = text.replace(/\$(?=\S)([^$\n]*?\S)\$(?!\d)/g, (match, math) => addMath(math, false))
   
   // Step 3: Restore code and parse markdown
   text = text.replace(placeholderPattern('C'), (match, index) => codeBlocks[parseInt(index)])
