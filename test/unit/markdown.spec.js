@@ -178,6 +178,30 @@ describe('Markdown Rendering', () => {
       expect(result).to.include('math-inline')
       expect(result).to.include('math-block')
     })
+
+    it('renders inline math that starts with a digit', () => {
+      for (const input of ['p is $0.5$ here', '$2x + 1$', '$10^3$']) {
+        expect(renderMarkdown(input), input).to.include('math-inline')
+      }
+    })
+
+    it('leaves prices alone', () => {
+      for (const input of ['It costs $5 and $10 later', 'Between $5-$10', 'From $5 to $10.']) {
+        const result = renderMarkdown(input)
+        expect(result, input).to.not.include('math-inline')
+        expect(result, input).to.include('$5')
+      }
+    })
+
+    it('still finds math after a price on the same line', () => {
+      const result = renderMarkdown('Pay $5 and let $x$ be the rest')
+      expect(result.match(/math-inline/g)).to.have.length(1)
+      expect(result).to.include('$5')
+    })
+
+    it('does not treat "$ x $" with inner spaces as math', () => {
+      expect(renderMarkdown('a $ x $ b')).to.not.include('math-inline')
+    })
   })
 
   describe('renderMath function', () => {
