@@ -234,6 +234,22 @@
           </div>
           
           <div class="settings-row">
+            <label
+              class="settings-label"
+              :class="{ 'settings-label-disabled': settings.ui.theme !== 'dark' }"
+              for="ui-invert-pdf"
+              title="Only applies with the dark theme"
+            >Invert PDF colors</label>
+            <input
+              id="ui-invert-pdf"
+              type="checkbox"
+              :checked="settings.ui.invertPdf"
+              :disabled="settings.ui.theme !== 'dark'"
+              @change="updateSetting('ui.invertPdf', $event.target.checked)"
+            >
+          </div>
+          
+          <div class="settings-row">
             <label class="settings-label">Default Sidebar Width</label>
             <input 
               type="number" 
@@ -357,6 +373,10 @@ export default {
   padding: 2px 4px;
   border-radius: 3px;
   font-size: 10px;
+}
+
+.settings-label-disabled {
+  color: var(--text-muted);
 }
 
 .shortcut-input {

@@ -1,7 +1,10 @@
 <template>
   <div 
     class="app-container" 
-    :class="{ 'theme-dark': settings?.ui?.theme === 'dark' }"
+    :class="{
+      'theme-dark': settings?.ui?.theme === 'dark',
+      'invert-pdf': settings?.ui?.theme === 'dark' && settings?.ui?.invertPdf
+    }"
     @dragover.prevent
     @drop="handleDrop"
   >

@@ -521,6 +521,14 @@ describe('LLM models', () => {
     expect(store.state.settings.llm.baseUrls.openrouter).to.equal('https://openrouter.ai/api/v1')
     expect(store.state.settings.chat.panelWidth).to.equal(420)
   })
+
+  it('hydrated settings from before invertPdf existed keep the theme and default to no inversion', () => {
+    const store = createTestStore()
+    store.commit('HYDRATE_SETTINGS', { ui: { theme: 'dark', sidebarWidth: 250 } })
+    expect(store.state.settings.ui.theme).to.equal('dark')
+    expect(store.state.settings.ui.sidebarWidth).to.equal(250)
+    expect(store.state.settings.ui.invertPdf).to.equal(false)
+  })
 })
 
 describe('saveSettings', () => {

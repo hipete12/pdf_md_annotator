@@ -54,7 +54,7 @@ conversation into a Quarto document.
   - Annotation box defaults
   - Custom LaTeX macros
   - Customizable keyboard shortcuts
-  - Light/Dark theme
+  - Light/Dark theme, with an option to invert PDF colors in dark mode
 
 ## Installation
 
