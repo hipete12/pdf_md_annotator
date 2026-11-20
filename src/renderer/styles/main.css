@@ -272,6 +272,21 @@ body {
   user-select: none;
 }
 
+/* Dark theme with "Invert PDF colors": invert the rendered pages (and their
+   thumbnails). The hue rotation keeps colours (links, figures, highlights)
+   close to their original hue; inverting slightly less than 100% avoids pure
+   black/white glare. Only the canvases are filtered, so annotations and text
+   selection keep their normal colours. */
+.invert-pdf .pdf-canvas,
+.invert-pdf .page-thumbnail canvas {
+  filter: invert(0.9) hue-rotate(180deg);
+}
+
+/* Matches inverted white, so pages don't flash white before they render */
+.invert-pdf .pdf-page-wrapper {
+  background: #1a1a1a;
+}
+
 /* PDF text layer (equivalent to pdfjs-dist/web/pdf_viewer.css) */
 .pdf-page-wrapper .textLayer {
   position: absolute;

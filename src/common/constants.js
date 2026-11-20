@@ -46,7 +46,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   ui: {
     sidebarWidth: 200,
     sidebarVisible: true,
-    theme: 'light'
+    theme: 'light',
+    // Dark theme only: also invert the colours of rendered PDF pages
+    invertPdf: false
   },
   // LLM connection. API keys are NOT settings: they are stored encrypted by
   // the main process (see src/main/secrets.js).

@@ -49,6 +49,34 @@ function startFakeLlm(respond) {
   })))
 }
 
+// Minimal valid PDF with one line of text per page
+function writeTestPdf(filePath, pageTexts) {
+  const objects = []
+  const add = (body) => { objects.push(body); return objects.length }
+  const catalog = add(null)
+  const pages = add(null)
+  const font = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
+  const kids = pageTexts.map((text) => {
+    const stream = `BT /F1 18 Tf 72 700 Td (${text.replace(/[()\\]/g, '\\$&')}) Tj ET`
+    const content = add(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`)
+    return add(`<< /Type /Page /Parent ${pages} 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 ${font} 0 R >> >> >>`)
+  })
+  objects[catalog - 1] = `<< /Type /Catalog /Pages ${pages} 0 R >>`
+  objects[pages - 1] = `<< /Type /Pages /Kids [${kids.map(k => `${k} 0 R`).join(' ')}] /Count ${kids.length} >>`
+
+  let pdf = '%PDF-1.4\n'
+  const offsets = objects.map((body, i) => {
+    const offset = pdf.length
+    pdf += `${i + 1} 0 obj\n${body}\nendobj\n`
+    return offset
+  })
+  const xref = pdf.length
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`
+  pdf += offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root ${catalog} 0 R >>\nstartxref\n${xref}\n%%EOF\n`
+  fs.writeFileSync(filePath, pdf, 'latin1')
+}
+
 /**
  * Launch the built app with a fresh profile whose settings are `settings`.
  * Returns { app, window, tempDir, profile }.
@@ -66,4 +94,4 @@ async function launchWithSettings(settings, extraArgs = []) {
   return { app, window, tempDir, profile }
 }
 
-module.exports = { startFakeLlm, launchWithSettings }
+module.exports = { startFakeLlm, launchWithSettings, writeTestPdf }
