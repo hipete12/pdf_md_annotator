@@ -9,7 +9,10 @@ const {
   describeHttpError,
   describeNetworkError,
   joinUrl,
-  getModelsUrl
+  getModelsUrl,
+  reasoningRequestFields,
+  parseOllamaThinking,
+  parseLmStudioReasoning
 } = require('../common/llm')
 
 const APP_REFERER = 'https://github.com/hipete12/pdf_md_annotator'
@@ -45,7 +48,7 @@ function buildHeaders(provider, apiKey, { userAgent, sessionId } = {}) {
   return headers
 }
 
-async function request(provider, baseUrl, url, options) {
+async function request(provider, baseUrl, url, options, { effort } = {}) {
   if (!baseUrl) throw new LlmError({ code: 'config', message: 'No base URL configured for this provider' })
   let response
   try {
@@ -55,14 +58,23 @@ async function request(provider, baseUrl, url, options) {
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '')
-    throw new LlmError(describeHttpError(response.status, text, provider.label))
+    throw new LlmError(describeHttpError(response.status, text, provider.label, { effort }))
   }
   return response
 }
 
+// Apply local-server reasoning info ({ efforts, defaultEffort } or null)
+function setLocalEfforts(model, reasoning) {
+  if (!reasoning) return
+  model.efforts = reasoning.efforts
+  model.defaultEffort = reasoning.defaultEffort
+  model.effortSource = 'provider'
+}
+
 // Local servers expose richer model info than their OpenAI-compatible
-// /models endpoint; use it (best effort) to detect vision support.
-async function enrichLocalVision(provider, baseUrl, models, signal) {
+// /models endpoint; use it (best effort) to detect vision support and
+// reasoning effort levels.
+async function enrichLocalModels(provider, baseUrl, models, signal) {
   const origin = String(baseUrl).replace(/\/v1\/?$/, '')
   try {
     if (provider.id === 'ollama') {
@@ -79,19 +91,32 @@ async function enrichLocalVision(provider, baseUrl, models, signal) {
           model.vision = info.capabilities.includes('vision')
           model.visionSource = 'provider'
         }
+        // { values: [...levels or true/false], default } (newer Ollama)
+        setLocalEfforts(model, parseOllamaThinking(info.thinking))
       }))
     } else if (provider.id === 'lmstudio') {
-      const res = await fetch(`${origin}/api/v0/models`, { signal })
-      if (!res.ok) return
-      const info = await res.json()
-      const byId = new Map((info.data || []).map(m => [m.id, m]))
-      for (const model of models) {
-        const entry = byId.get(model.id)
-        if (entry?.type) {
-          model.vision = entry.type === 'vlm'
-          model.visionSource = 'provider'
+      const res = await fetch(`${origin}/api/v0/models`, { signal }).catch(() => null)
+      if (res?.ok) {
+        const info = await res.json()
+        const byId = new Map((info.data || []).map(m => [m.id, m]))
+        for (const model of models) {
+          const entry = byId.get(model.id)
+          if (entry?.type) {
+            model.vision = entry.type === 'vlm'
+            model.visionSource = 'provider'
+          }
+          if (entry?.max_context_length) model.contextLength = entry.max_context_length
         }
-        if (entry?.max_context_length) model.contextLength = entry.max_context_length
+      }
+      // Reasoning options are only in the v1 REST API (LM Studio 0.4.8+)
+      const v1 = await fetch(`${origin}/api/v1/models`, { signal }).catch(() => null)
+      if (v1?.ok) {
+        const list = (await v1.json())?.models || []
+        for (const model of models) {
+          const entry = list.find(m => m.key === model.id ||
+            (m.loaded_instances || []).some(instance => instance.id === model.id))
+          setLocalEfforts(model, parseLmStudioReasoning(entry?.capabilities?.reasoning))
+        }
       }
     }
   } catch {
@@ -116,7 +141,7 @@ async function listModels({ providerId, baseUrl, apiKey, userAgent, timeoutMs = 
       signal: controller.signal
     })
     const models = normalizeModelList(await response.json())
-    if (provider.local) await enrichLocalVision(provider, baseUrl, models, controller.signal)
+    if (provider.local) await enrichLocalModels(provider, baseUrl, models, controller.signal)
     return models
   } catch (err) {
     if (err.name === 'AbortError') {
@@ -141,11 +166,12 @@ async function listModels({ providerId, baseUrl, apiKey, userAgent, timeoutMs = 
  * @param {string} [params.userAgent]
  * @param {Array} [params.tools] - OpenAI-format tool definitions
  * @param {string} [params.toolChoice] - e.g. 'none' to forbid tool calls
+ * @param {string} [params.reasoningEffort] - thinking effort (e.g. 'high', 'max'); omitted = model default
  * @param {AbortSignal} [params.signal]
  * @param {(event: object) => void} params.onEvent - receives parser events
  * @returns {Promise<{ content: string, reasoning: string, model: string|null, usage: object|null, finishReason: string|null, toolCalls: Array<{id: string, name: string, arguments: string}> }>}
  */
-async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, sessionId, userAgent, tools, toolChoice, signal, onEvent }) {
+async function streamChat({ providerId, baseUrl, apiKey, model, messages, temperature, sessionId, userAgent, tools, toolChoice, reasoningEffort, signal, onEvent }) {
   const provider = getProvider(providerId)
   if (provider.requiresKey && !apiKey) {
     throw new LlmError({ code: 'auth', message: `Add your ${provider.label} API key in Settings` })
@@ -161,13 +187,14 @@ async function streamChat({ providerId, baseUrl, apiKey, model, messages, temper
     body.tools = tools
     if (toolChoice) body.tool_choice = toolChoice
   }
+  Object.assign(body, reasoningRequestFields(provider.id, reasoningEffort))
 
   const response = await request(provider, baseUrl, joinUrl(baseUrl, 'chat/completions'), {
     method: 'POST',
     headers: buildHeaders(provider, apiKey, { userAgent, sessionId }),
     body: JSON.stringify(body),
     signal
-  })
+  }, { effort: reasoningEffort })
 
   const result = { content: '', reasoning: '', model: null, usage: null, finishReason: null, toolCalls: [] }
   const callsByIndex = new Map()

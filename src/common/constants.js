@@ -61,6 +61,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     models: Object.fromEntries(Object.keys(LLM_PROVIDERS).map(id => [id, ''])),
     // { [modelId]: true|false } manual override of vision detection
     visionOverrides: {},
+    // Thinking effort for each provider's default model ({ [providerId]: 'high' });
+    // absent = the model's own default. Chats can choose their own.
+    efforts: {},
     temperature: 0.3,
     // Above this estimated size only the relevant pages are sent
     contextBudgetTokens: 32000,

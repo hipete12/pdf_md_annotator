@@ -221,8 +221,8 @@
         <span
           v-if="message.model"
           class="chat-message-model"
-          :title="message.model"
-        >{{ message.model }}</span>
+          :title="message.effort ? `${message.model}, thinking effort: ${message.effort}` : message.model"
+        >{{ formatModelLabel(message.model, message.effort) }}</span>
       </div>
     </template>
   </div>
@@ -235,6 +235,7 @@ import { renderMarkdown } from '../../utils/markdown'
 import ChatEditBox from './ChatEditBox.vue'
 import ChatToolSteps from './ChatToolSteps.vue'
 import { contextClass, contextKindLabel, contextLocation } from '../../utils/contextChips'
+import { formatModelLabel } from '../../../common/llm'
 
 let clipboard = null
 try {
@@ -279,7 +280,7 @@ export default {
       setTimeout(() => { copied.value = false }, 1200)
     }
 
-    return { rendered, copied, copy, confirmingDelete, contextClass, contextKindLabel, contextLocation }
+    return { rendered, copied, copy, confirmingDelete, contextClass, contextKindLabel, contextLocation, formatModelLabel }
   }
 }
 </script>

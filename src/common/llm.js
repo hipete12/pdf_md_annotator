@@ -149,12 +149,154 @@ export function guessVisionSupport(modelId) {
   return VISION_MODEL_PATTERNS.some(re => re.test(id)) ? true : null
 }
 
+// Reasoning ("thinking") effort levels, lowest to highest. Providers use
+// subsets of these; "none" turns thinking off where a model allows it.
+export const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * Deduplicate effort names and sort them from lowest to highest (names
+ * outside EFFORT_ORDER go last, in their original order).
+ * @param {Array} efforts
+ * @returns {string[]}
+ */
+export function sortEfforts(efforts) {
+  const names = [...new Set((efforts || []).filter(e => typeof e === 'string' && e))]
+  const rank = (e) => {
+    const i = EFFORT_ORDER.indexOf(e)
+    return i === -1 ? EFFORT_ORDER.length + names.indexOf(e) : i
+  }
+  return names.sort((a, b) => rank(a) - rank(b))
+}
+
+/**
+ * Guess the effort levels of a model from its id, for providers that list
+ * ids only (OpenAI; also local gpt-oss). Conservative: only levels every
+ * model of the family accepts, so a request is never rejected for them.
+ * @param {string} modelId
+ * @returns {string[]|null} null when the model is not a known reasoning model
+ */
+export function guessReasoningEfforts(modelId) {
+  // "openai/gpt-oss-20b" (LM Studio, custom gateways) -> "gpt-oss-20b"
+  const id = String(modelId || '').toLowerCase().replace(/^.*\//, '')
+  if (/chat|audio|realtime|search|image|transcribe|tts/.test(id)) return null
+  if (/^gpt-oss/.test(id)) return ['low', 'medium', 'high']
+  if (/^o[1-9](-|$)/.test(id)) return /^o1-(mini|preview)/.test(id) ? null : ['low', 'medium', 'high']
+  // GPT-5 and later; the -pro models only reliably accept "high"
+  if (/^gpt-([5-9]|\d{2,})(\.|-|$)/.test(id)) return /-pro(\b|$)/.test(id) ? ['high'] : ['low', 'medium', 'high']
+  return null
+}
+
+/**
+ * Effort levels a model list entry reports, if any:
+ * - OpenRouter: reasoning.supported_efforts + reasoning.default_effort
+ * - OpenCode (Go): capabilities.reasoning.effort + .default {type: 'effort', value}
+ * @param {object} item - raw model entry
+ * @returns {{efforts: string[]|null, defaultEffort: string|null, effortSource: string}}
+ */
+function readReportedEfforts(item) {
+  const openRouter = item && typeof item.reasoning === 'object' ? item.reasoning : null
+  const openCode = item?.capabilities && typeof item.capabilities.reasoning === 'object' ? item.capabilities.reasoning : null
+  if (openRouter) {
+    const efforts = Array.isArray(openRouter.supported_efforts) ? sortEfforts(openRouter.supported_efforts) : []
+    return {
+      efforts: efforts.length ? efforts : null,
+      defaultEffort: typeof openRouter.default_effort === 'string' ? openRouter.default_effort : null,
+      effortSource: 'provider'
+    }
+  }
+  if (openCode) {
+    const efforts = Array.isArray(openCode.effort) ? sortEfforts(openCode.effort) : []
+    const preset = openCode.default
+    return {
+      efforts: efforts.length ? efforts : null,
+      defaultEffort: preset?.type === 'effort' && typeof preset.value === 'string' ? preset.value : null,
+      effortSource: 'provider'
+    }
+  }
+  return null
+}
+
+/**
+ * Effort levels from Ollama's POST /api/show `thinking` object:
+ * { values: ['low', 'medium', 'high'], default: 'medium' } for named levels,
+ * { values: [true, false] } for an on/off switch, [false] = no thinking.
+ * On/off models get "none" (off) and "high" (on), the names Ollama's
+ * OpenAI-compatible reasoning_effort maps to false/true.
+ * @param {object} thinking
+ * @returns {{efforts: string[]|null, defaultEffort: string|null}|null} null when absent
+ */
+export function parseOllamaThinking(thinking) {
+  if (!thinking || !Array.isArray(thinking.values)) return null
+  const named = thinking.values.filter(v => typeof v === 'string' && v)
+  if (named.length) {
+    return {
+      efforts: sortEfforts(named),
+      defaultEffort: typeof thinking.default === 'string' ? thinking.default : null
+    }
+  }
+  const switchable = thinking.values.includes(true) && thinking.values.includes(false)
+  const onOff = (v) => (v === true ? 'high' : v === false ? 'none' : null)
+  return {
+    efforts: switchable ? ['none', 'high'] : null,
+    defaultEffort: switchable ? onOff(thinking.default) : null
+  }
+}
+
+/**
+ * Effort levels from LM Studio's GET /api/v1/models
+ * capabilities.reasoning = { allowed_options: ['off', 'on', 'low', ...], default }.
+ * "off" is sent as "none"; a bare "on" (no graded levels) as "high".
+ * @param {object} reasoning
+ * @returns {{efforts: string[]|null, defaultEffort: string|null}|null} null when absent
+ */
+export function parseLmStudioReasoning(reasoning) {
+  if (!reasoning || !Array.isArray(reasoning.allowed_options)) return null
+  const options = reasoning.allowed_options.filter(v => typeof v === 'string')
+  const graded = options.some(v => v !== 'on' && v !== 'off')
+  const toEffort = (v) => {
+    if (v === 'off') return 'none'
+    if (v === 'on') return graded ? null : 'high'
+    return v
+  }
+  const efforts = sortEfforts(options.map(toEffort).filter(Boolean))
+  // A single option (e.g. always on) leaves nothing to choose
+  return {
+    efforts: efforts.length > 1 ? efforts : null,
+    defaultEffort: typeof reasoning.default === 'string' ? toEffort(reasoning.default) : null
+  }
+}
+
+/**
+ * Request body fields that set the reasoning effort for a provider:
+ * OpenRouter takes reasoning: { effort }, the OpenAI-compatible rest take
+ * reasoning_effort (OpenAI, OpenCode Go, Ollama, LM Studio).
+ * @param {string} providerId
+ * @param {string} effort
+ * @returns {object} fields to merge into the request body ({} when no effort)
+ */
+export function reasoningRequestFields(providerId, effort) {
+  if (!effort) return {}
+  return providerId === 'openrouter' ? { reasoning: { effort } } : { reasoning_effort: effort }
+}
+
+/**
+ * Model name as shown in the UI, with the effort when one is chosen:
+ * "glm-5.3:max"
+ * @param {string} model
+ * @param {string|null} [effort]
+ * @returns {string}
+ */
+export function formatModelLabel(model, effort) {
+  if (!model) return ''
+  return effort ? `${model}:${effort}` : model
+}
+
 /**
  * Normalize a GET /models response into a sorted list of chat models.
- * Handles OpenRouter (reports input modalities and context length) and plain
- * OpenAI-compatible servers (ids only).
+ * Handles OpenRouter and OpenCode (report modalities, context length and
+ * reasoning efforts) and plain OpenAI-compatible servers (ids only).
  * @param {object} body - Parsed JSON response
- * @returns {Array<{id: string, name: string, contextLength: number|null, vision: boolean|null, visionSource: string, tools: boolean|null}>}
+ * @returns {Array<{id: string, name: string, contextLength: number|null, vision: boolean|null, visionSource: string, tools: boolean|null, efforts: string[]|null, defaultEffort: string|null, effortSource: string}>}
  */
 export function normalizeModelList(body) {
   const items = Array.isArray(body?.data) ? body.data : (Array.isArray(body) ? body : [])
@@ -180,6 +322,14 @@ export function normalizeModelList(body) {
       visionSource = vision === null ? 'unknown' : 'guess'
     }
 
+    // Reasoning effort levels the model accepts (null: no choice / unknown)
+    const guessed = guessReasoningEfforts(id)
+    const reasoning = readReportedEfforts(item) || {
+      efforts: guessed,
+      defaultEffort: null,
+      effortSource: guessed ? 'guess' : 'unknown'
+    }
+
     models.push({
       id,
       name: item?.name || id,
@@ -187,7 +337,8 @@ export function normalizeModelList(body) {
       vision,
       visionSource,
       // OpenRouter lists supported request parameters; null = unknown
-      tools: Array.isArray(item?.supported_parameters) ? item.supported_parameters.includes('tools') : null
+      tools: Array.isArray(item?.supported_parameters) ? item.supported_parameters.includes('tools') : null,
+      ...reasoning
     })
   }
   return models.sort((a, b) => a.name.localeCompare(b.name))
@@ -288,9 +439,11 @@ export function createSseParser(onEvent) {
  * @param {number} status
  * @param {string} bodyText
  * @param {string} providerLabel
+ * @param {object} [request]
+ * @param {string} [request.effort] - reasoning effort that was sent, if any
  * @returns {{ code: string, message: string }}
  */
-export function describeHttpError(status, bodyText, providerLabel) {
+export function describeHttpError(status, bodyText, providerLabel, { effort } = {}) {
   let detail = ''
   try {
     const json = JSON.parse(bodyText)
@@ -306,6 +459,9 @@ export function describeHttpError(status, bodyText, providerLabel) {
   }
   if ((status === 400 || status === 404 || status === 422) && /\btools?\b|tool[_ ]?(use|calling|choice)|function[_ ]?call/i.test(detail)) {
     return { code: 'tools_unsupported', message: `This model does not support tools${suffix}` }
+  }
+  if (effort && (status === 400 || status === 422) && /reasoning|effort|thinking/i.test(detail)) {
+    return { code: 'effort_unsupported', message: `This model does not accept the chosen thinking effort. Choose "Default" in the model picker${suffix}` }
   }
   if (status === 404) {
     return { code: 'not_found', message: `Not found (HTTP 404) – check the base URL and model name${suffix}` }
