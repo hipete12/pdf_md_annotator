@@ -22,10 +22,21 @@
   --context-note: #d97706;
   --context-reply: #7c3aed;
   --context-report: #0d9488;
+  /* Form fields, menus and the in-app title bar */
+  --input-bg: #ffffff;
+  --menu-hover: #e2e8f0;
+  --titlebar-bg: #e8edf3;
+  --titlebar-height: 0px;
+  color-scheme: light;
 }
 
-/* Dark theme */
+/* Dark theme (class on <html>). color-scheme makes the native parts of form
+   controls (checkboxes, select popups, number spinners) and scrollbars dark. */
 .theme-dark {
+  color-scheme: dark;
+  --input-bg: #0b1222;
+  --menu-hover: #334155;
+  --titlebar-bg: #0b1120;
   --bg-color: #0f172a;
   --sidebar-bg: #1e293b;
   --border-color: #334155;
@@ -48,10 +59,47 @@ body {
   color: var(--text-color);
 }
 
+/* Windows/Linux draw their own title bar above the app (TitleBar.vue) */
+.custom-titlebar {
+  --titlebar-height: 32px;
+}
+
+/* Form fields follow the theme. :where() keeps specificity at zero so any
+   component style (e.g. a transparent chat composer) still wins. */
+:where(input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"]), select, textarea) {
+  background-color: var(--input-bg);
+  color: var(--text-color);
+}
+
+:where(input, textarea)::placeholder {
+  color: var(--text-muted);
+  opacity: 1;
+}
+
+:where(option, optgroup) {
+  background-color: var(--input-bg);
+  color: var(--text-color);
+}
+
+:where(input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--primary-color);
+}
+
+:where(input, select, textarea):disabled {
+  opacity: 0.6;
+}
+
 /* App layout */
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
 .app-container {
   display: flex;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -73,6 +121,8 @@ body {
   width: 0;
   min-width: 0;
   border-right: none;
+  /* At zero width the header would otherwise spill over the toolbar */
+  overflow: hidden;
 }
 
 .sidebar-header {
@@ -257,12 +307,31 @@ body {
   align-items: center;
 }
 
+/* Page palette: notes sit on the page, so they take the page's colours
+   rather than the app theme's (dark ink on a white page, light ink on an
+   inverted one) */
 .pdf-page-wrapper {
+  --page-paper: #ffffff;
+  --page-ink: #1e293b;
+  --page-muted: #64748b;
+  --page-rule: rgba(15, 23, 42, 0.15);
+  --page-code-bg: rgba(15, 23, 42, 0.08);
+  --page-note-bg: rgba(255, 255, 255, 0.95);
   position: relative;
   flex: 0 0 auto;
   box-shadow: var(--shadow-lg);
-  background: white;
+  background: var(--page-paper);
   overflow: visible;
+}
+
+/* Inverted pages: 90% invert of white is #1a1a1a, of black is #e6e6e6 */
+.invert-pdf .pdf-page-wrapper {
+  --page-paper: #1a1a1a;
+  --page-ink: #e6e6e6;
+  --page-muted: #a3a3a3;
+  --page-rule: rgba(255, 255, 255, 0.18);
+  --page-code-bg: rgba(255, 255, 255, 0.1);
+  --page-note-bg: rgba(26, 26, 26, 0.95);
 }
 
 .pdf-canvas {
@@ -275,16 +344,12 @@ body {
 /* Dark theme with "Invert PDF colors": invert the rendered pages (and their
    thumbnails). The hue rotation keeps colours (links, figures, highlights)
    close to their original hue; inverting slightly less than 100% avoids pure
-   black/white glare. Only the canvases are filtered, so annotations and text
-   selection keep their normal colours. */
+   black/white glare. Only the canvases are filtered; notes switch to the
+   inverted page palette above, and text selection keeps its colour. */
 .invert-pdf .pdf-canvas,
-.invert-pdf .page-thumbnail canvas {
+.invert-pdf .page-thumbnail canvas,
+.invert-pdf .doc-frame {
   filter: invert(0.9) hue-rotate(180deg);
-}
-
-/* Matches inverted white, so pages don't flash white before they render */
-.invert-pdf .pdf-page-wrapper {
-  background: #1a1a1a;
 }
 
 /* PDF text layer (equivalent to pdfjs-dist/web/pdf_viewer.css) */
@@ -348,6 +413,7 @@ body {
   pointer-events: none;
   overflow: visible;
   z-index: 2;
+  color: var(--page-ink);
 }
 
 .annotation-box {
@@ -367,14 +433,10 @@ body {
 }
 
 .annotation-box.selected {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--page-note-bg);
   border-color: var(--primary-color);
   box-shadow: 0 0 0 2px var(--selection-color), var(--shadow-md);
   z-index: 1000;
-}
-
-.theme-dark .annotation-box.selected {
-  background: rgba(30, 41, 59, 0.95);
 }
 
 .annotation-box.collapsed {
@@ -385,7 +447,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  border: 1px solid var(--annotation-border);
+  border: 1px solid var(--page-rule);
 }
 
 .annotation-box.collapsed .annotation-content {
@@ -399,7 +461,7 @@ body {
 
 .annotation-collapsed-title {
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--page-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -640,7 +702,8 @@ body {
   left: 0;
   right: 0;
   margin-top: 4px;
-  background: white;
+  background: var(--annotation-bg);
+  color: var(--text-color);
   border: 1px solid var(--primary-color);
   border-radius: 4px;
   padding: 8px;
@@ -670,7 +733,8 @@ body {
 /* Settings modal */
 .modal-overlay {
   position: fixed;
-  top: 0;
+  /* Below the in-app title bar, which stays usable */
+  top: var(--titlebar-height);
   left: 0;
   right: 0;
   bottom: 0;

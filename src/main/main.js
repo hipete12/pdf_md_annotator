@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const Store = require('electron-store')
@@ -11,6 +11,7 @@ const {
   isPdfFile, isChatFile, chatBaseName, docPathFor, withChatExtension, nextUntitledName, CHAT_EXTENSION
 } = require('../common/chatFiles')
 const { codeCellLanguages } = require('../common/docGen')
+const { menuItemAt, serializeMenu, usesCustomTitleBar } = require('../common/menuModel')
 const { listModels } = require('./llm')
 const { runAgent } = require('./agent')
 const { findQuarto, renderDocument, prepareForViewer } = require('./quarto')
@@ -34,6 +35,32 @@ let mainWindow = null
 let currentPdfPath = null
 
 const isDev = process.env.NODE_ENV === 'development'
+
+// Windows and Linux: the renderer draws the title bar and menu bar so they
+// follow the app theme (see src/common/menuModel.js)
+const customTitleBar = usesCustomTitleBar(process.platform)
+
+// Window background before the page paints, per theme (matches --bg-color)
+const THEME_BACKGROUNDS = { light: '#f8fafc', dark: '#0f172a' }
+
+function applyTheme(theme) {
+  const name = theme === 'dark' ? 'dark' : 'light'
+  // Native UI Electron draws (context menus, dialogs on Windows, the macOS
+  // title bar) follows the app theme instead of the system one
+  nativeTheme.themeSource = name
+  mainWindow?.setBackgroundColor(THEME_BACKGROUNDS[name])
+}
+
+function setWindowTitle(title) {
+  if (!mainWindow) return
+  mainWindow.setTitle(title)
+  mainWindow.webContents.send('window:title', title)
+}
+
+function sendWindowState() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('window:state', { maximized: mainWindow.isMaximized() })
+}
 
 // Files the app can open: PDFs and standalone chats
 function resolvePdfPath(candidate, baseDir) {
@@ -70,11 +97,15 @@ function openExternalIfSafe(url) {
 }
 
 function createWindow() {
+  const theme = store.get('ui.theme') === 'dark' ? 'dark' : 'light'
+  nativeTheme.themeSource = theme
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 800,
     minHeight: 600,
+    frame: !customTitleBar,
+    backgroundColor: THEME_BACKGROUNDS[theme],
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -102,6 +133,10 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
+
+  // The in-app title bar swaps its maximize/restore button
+  mainWindow.on('maximize', sendWindowState)
+  mainWindow.on('unmaximize', sendWindowState)
 
   // Rendered markdown (notes, chat replies) can contain links. Never open
   // them inside the app (the renderer has Node integration): hand safe URLs
@@ -256,6 +291,8 @@ function createMenu() {
 
   const menu = Menu.buildFromTemplate(template)
   Menu.setApplicationMenu(menu)
+  // The in-app menu bar re-reads the menu (e.g. new recent files)
+  mainWindow?.webContents.send('menu:changed')
 }
 
 async function openFileDialog() {
@@ -319,7 +356,7 @@ function openPdfFile(filePath) {
     annotations
   })
 
-  mainWindow?.setTitle(`PDF Annotator - ${path.basename(filePath)}`)
+  setWindowTitle(`PDF Annotator - ${path.basename(filePath)}`)
 }
 
 // IPC Handlers
@@ -639,7 +676,7 @@ function newChat() {
   const chatPath = newUntitledChatPath()
   currentPdfPath = null
   mainWindow?.webContents.send('open-chat', { chatPath, data: null })
-  mainWindow?.setTitle(`PDF Annotator - ${chatBaseName(chatPath)}`)
+  setWindowTitle(`PDF Annotator - ${chatBaseName(chatPath)}`)
   return chatPath
 }
 
@@ -656,7 +693,7 @@ function openChatFile(filePath) {
   currentPdfPath = null
   addRecentFile(filePath)
   mainWindow?.webContents.send('open-chat', { chatPath: filePath, data })
-  mainWindow?.setTitle(`PDF Annotator - ${chatBaseName(filePath)}`)
+  setWindowTitle(`PDF Annotator - ${chatBaseName(filePath)}`)
 }
 
 // Keep copies of a document before it is replaced: .versions/<name>/<time>.qmd
@@ -876,8 +913,36 @@ ipcMain.handle('get-chats-folder', () => resolveChatsFolder())
 // Back on the welcome screen
 ipcMain.handle('window:reset-title', () => {
   currentPdfPath = null
-  mainWindow?.setTitle('PDF Annotator')
+  setWindowTitle('PDF Annotator')
 })
+
+// In-app title bar (Windows/Linux): window state, controls and menu
+ipcMain.handle('window:get-state', () => ({
+  platform: process.platform,
+  title: mainWindow?.getTitle() || 'PDF Annotator',
+  maximized: Boolean(mainWindow?.isMaximized())
+}))
+
+ipcMain.on('window:minimize', () => mainWindow?.minimize())
+
+ipcMain.on('window:toggle-maximize', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMaximized()) mainWindow.unmaximize()
+  else mainWindow.maximize()
+})
+
+ipcMain.on('window:close', () => mainWindow?.close())
+
+ipcMain.handle('menu:get', () => serializeMenu(Menu.getApplicationMenu()?.items))
+
+ipcMain.on('menu:click', (event, indexPath) => {
+  const item = menuItemAt(Menu.getApplicationMenu()?.items, indexPath)
+  if (!item || item.enabled === false || item.visible === false || item.submenu || item.type === 'separator') return
+  // Same as clicking the native menu: runs the item's click or role
+  item.click(undefined, mainWindow, mainWindow?.webContents)
+})
+
+ipcMain.on('theme:changed', (event, theme) => applyTheme(theme))
 
 // App lifecycle
 const gotSingleInstanceLock = app.requestSingleInstanceLock()

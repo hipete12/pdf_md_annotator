@@ -1012,7 +1012,8 @@ export default {
 
 .chat-panel.fullscreen {
   position: fixed;
-  inset: 0;
+  /* Below the in-app title bar */
+  inset: var(--titlebar-height) 0 0 0;
   z-index: 500;
   width: auto;
   border-left: none;

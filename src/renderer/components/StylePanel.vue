@@ -34,7 +34,7 @@
       <div class="style-row">
         <label>Font Family</label>
         <select 
-          :value="styleConfig.fontFamily || 'system-ui'"
+          :value="fontOptionValue(styleConfig.fontFamily)"
           @change="updateStyle('fontFamily', $event.target.value)"
         >
           <option value="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">System Default</option>
@@ -51,6 +51,8 @@
 </template>
 
 <script>
+import { fontOptionValue } from '../utils/fonts'
+
 export default {
   name: 'StylePanel',
   
@@ -69,7 +71,8 @@ export default {
     }
     
     return {
-      updateStyle
+      updateStyle,
+      fontOptionValue
     }
   }
 }
@@ -80,6 +83,8 @@ export default {
   position: absolute;
   top: 36px;
   right: 0;
+  /* App UI, not part of the page: theme colours, not the page palette */
+  color: var(--text-color);
   background: var(--annotation-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;

@@ -284,7 +284,7 @@ export default {
 .editor-split .live-preview {
   flex: 1;
   min-width: 0;
-  border-left: 1px solid var(--border-color);
+  border-left: 1px solid var(--page-rule, var(--border-color));
   padding-left: 8px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -302,10 +302,15 @@ export default {
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: var(--md-font-size, 14px);
   line-height: var(--md-line-height, 1.6);
-  background: rgba(255, 255, 255, 0.9);
+  /* Notes use the page palette (see .pdf-page-wrapper in main.css) */
+  background: var(--page-note-bg, var(--input-bg));
   color: inherit;
   border-radius: 4px;
   padding: 4px;
+}
+
+.markdown-textarea::placeholder {
+  color: var(--page-muted, var(--text-muted));
 }
 
 .markdown-preview {
@@ -321,12 +326,12 @@ export default {
 .markdown-preview:empty::before,
 .markdown-preview .placeholder {
   content: 'Click to add notes...';
-  color: var(--text-muted);
+  color: var(--page-muted, var(--text-muted));
   font-style: italic;
 }
 
 .markdown-preview .placeholder {
-  color: var(--text-muted);
+  color: var(--page-muted, var(--text-muted));
   font-style: italic;
 }
 
@@ -391,18 +396,18 @@ export default {
   margin: 0.5em 0;
   padding-left: 1em;
   border-left: 3px solid var(--primary-color);
-  color: var(--text-muted);
+  color: var(--page-muted, var(--text-muted));
 }
 
 .markdown-preview :deep(code) {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--page-code-bg, rgba(0, 0, 0, 0.1));
   padding: 0.1em 0.3em;
   border-radius: 3px;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 .markdown-preview :deep(pre) {
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--page-code-bg, rgba(0, 0, 0, 0.1));
   padding: 0.5em;
   border-radius: 4px;
   overflow-x: auto;

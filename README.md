@@ -54,7 +54,7 @@ conversation into a Quarto document.
   - Annotation box defaults
   - Custom LaTeX macros
   - Customizable keyboard shortcuts
-  - Light/Dark theme, with an option to invert PDF colors in dark mode
+  - Light/Dark theme that also covers the title bar and menus (on Windows and Linux the app draws its own title bar), with an option to invert PDF and rendered document colors in dark mode; notes on the page switch to light text
 
 ## Installation
 

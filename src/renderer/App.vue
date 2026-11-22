@@ -1,98 +1,99 @@
 <template>
-  <div 
-    class="app-container" 
-    :class="{
-      'theme-dark': settings?.ui?.theme === 'dark',
-      'invert-pdf': settings?.ui?.theme === 'dark' && settings?.ui?.invertPdf
-    }"
-    @dragover.prevent
-    @drop="handleDrop"
-  >
-    <!-- Sidebar -->
-    <Sidebar 
-      v-if="pdfDocument"
-      :collapsed="!sidebarVisible"
-      @toggle="toggleSidebar"
-    />
-    
-    <!-- Sidebar toggle button when collapsed -->
-    <button 
-      v-if="pdfDocument && !sidebarVisible"
-      class="sidebar-expand-btn"
-      @click="toggleSidebar"
-      title="Show sidebar"
-    >
-      ▶
-    </button>
-    
-    <!-- Standalone chat: the chat fills the window -->
-    <div
-      v-if="mode === 'chat'"
-      class="chat-workspace"
-    >
-      <ChatPanel
-        :key="chatPath"
-        standalone
-        @close="closeWorkspace"
-        @open-settings="openSettings"
-        @new-chat="newChat"
-        @save-as="saveChatAs"
-      />
-      <DocumentViewer
-        v-if="viewerOpen"
-        :key="`doc-${chatPath}`"
-        @open-settings="openSettings"
-      />
-    </div>
+  <div class="app-shell">
+    <!-- Windows/Linux: our own title bar and menu, in the app theme -->
+    <TitleBar v-if="customTitleBar" />
 
-    <!-- Main content -->
-    <div
-      v-else
-      class="main-content"
+    <div 
+      class="app-container" 
+      @dragover.prevent
+      @drop="handleDrop"
     >
-      <!-- Toolbar -->
-      <Toolbar 
+      <!-- Sidebar -->
+      <Sidebar 
         v-if="pdfDocument"
-        :chat-open="chatVisible"
-        @zoom-in="zoomIn"
-        @zoom-out="zoomOut"
-        @zoom-reset="zoomReset"
-        @open-settings="openSettings"
-        @toggle-chat="toggleChat"
+        :collapsed="!sidebarVisible"
+        @toggle="toggleSidebar"
       />
-      
-      <!-- PDF Viewer -->
-      <PdfViewer 
-        v-if="pdfDocument"
-        ref="pdfViewer"
-      />
-      
-      <!-- Welcome screen when no PDF is loaded -->
-      <WelcomeScreen 
+    
+      <!-- Sidebar toggle button when collapsed -->
+      <button 
+        v-if="pdfDocument && !sidebarVisible"
+        class="sidebar-expand-btn"
+        @click="toggleSidebar"
+        title="Show sidebar"
+      >
+        ▶
+      </button>
+    
+      <!-- Standalone chat: the chat fills the window -->
+      <div
+        v-if="mode === 'chat'"
+        class="chat-workspace"
+      >
+        <ChatPanel
+          :key="chatPath"
+          standalone
+          @close="closeWorkspace"
+          @open-settings="openSettings"
+          @new-chat="newChat"
+          @save-as="saveChatAs"
+        />
+        <DocumentViewer
+          v-if="viewerOpen"
+          :key="`doc-${chatPath}`"
+          @open-settings="openSettings"
+        />
+      </div>
+
+      <!-- Main content -->
+      <div
         v-else
-        @open-file="openFile"
-        @new-chat="newChat"
-        @open-recent="openRecent"
+        class="main-content"
+      >
+        <!-- Toolbar -->
+        <Toolbar 
+          v-if="pdfDocument"
+          :chat-open="chatVisible"
+          @zoom-in="zoomIn"
+          @zoom-out="zoomOut"
+          @zoom-reset="zoomReset"
+          @open-settings="openSettings"
+          @toggle-chat="toggleChat"
+        />
+      
+        <!-- PDF Viewer -->
+        <PdfViewer 
+          v-if="pdfDocument"
+          ref="pdfViewer"
+        />
+      
+        <!-- Welcome screen when no PDF is loaded -->
+        <WelcomeScreen 
+          v-else
+          @open-file="openFile"
+          @new-chat="newChat"
+          @open-recent="openRecent"
+        />
+      </div>
+    
+      <!-- Chat (right side, resizable; can go full screen) -->
+      <ChatPanel
+        v-if="pdfDocument && chatVisible"
+        @close="toggleChat"
+        @open-settings="openSettings"
+      />
+    
+      <!-- Settings Modal -->
+      <SettingsModal 
+        v-if="settingsModalOpen"
+        @close="closeSettings"
       />
     </div>
-    
-    <!-- Chat (right side, resizable; can go full screen) -->
-    <ChatPanel
-      v-if="pdfDocument && chatVisible"
-      @close="toggleChat"
-      @open-settings="openSettings"
-    />
-    
-    <!-- Settings Modal -->
-    <SettingsModal 
-      v-if="settingsModalOpen"
-      @close="closeSettings"
-    />
   </div>
 </template>
 
 <script>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch, watchEffect } from 'vue'
 import { useStore } from 'vuex'
 import * as pdfjsLib from 'pdfjs-dist'
 import Sidebar from './components/Sidebar.vue'
@@ -102,6 +103,8 @@ import WelcomeScreen from './components/WelcomeScreen.vue'
 import SettingsModal from './components/SettingsModal.vue'
 import ChatPanel from './components/chat/ChatPanel.vue'
 import DocumentViewer from './components/DocumentViewer.vue'
+import TitleBar from './components/TitleBar.vue'
+import { usesCustomTitleBar } from '../common/menuModel'
 
 // Safely get ipcRenderer
 let ipcRenderer = null
@@ -139,7 +142,8 @@ export default {
     WelcomeScreen,
     SettingsModal,
     ChatPanel,
-    DocumentViewer
+    DocumentViewer,
+    TitleBar
   },
   
   setup() {
@@ -163,6 +167,21 @@ export default {
     const settingsModalOpen = computed(() => store.state.settingsModalOpen)
     const settings = computed(() => store.state.settings)
     const chatVisible = computed(() => Boolean(store.state.settings.chat?.panelVisible))
+    const customTitleBar = Boolean(ipcRenderer) && usesCustomTitleBar(process.platform)
+
+    // Theme classes go on <html> so everything inherits them, including the
+    // body background, native form controls and scrollbars (color-scheme)
+    const isDark = computed(() => settings.value?.ui?.theme === 'dark')
+    watchEffect(() => {
+      const root = document.documentElement
+      root.classList.toggle('theme-dark', isDark.value)
+      root.classList.toggle('invert-pdf', isDark.value && Boolean(settings.value?.ui?.invertPdf))
+      root.classList.toggle('custom-titlebar', customTitleBar)
+    })
+    // Native UI drawn by Electron (and the window background) follows suit
+    watch(isDark, (dark) => {
+      ipcRenderer?.send('theme:changed', dark ? 'dark' : 'light')
+    }, { immediate: true })
     
     // Methods
     const toggleSidebar = () => {
@@ -654,6 +673,7 @@ export default {
       sidebarVisible,
       settingsModalOpen,
       settings,
+      customTitleBar,
       toggleSidebar,
       zoomIn,
       zoomOut,
