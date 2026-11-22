@@ -420,7 +420,7 @@ export default {
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #ffffff;
+  background: var(--bg-color);
 }
 
 .doc-frame {

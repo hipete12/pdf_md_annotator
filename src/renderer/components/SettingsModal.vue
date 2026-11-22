@@ -40,7 +40,7 @@
             <label class="settings-label">Default Font Family</label>
             <select 
               class="settings-input"
-              :value="settings.markdown.fontFamily"
+              :value="fontOptionValue(settings.markdown.fontFamily)"
               @change="updateSetting('markdown.fontFamily', $event.target.value)"
             >
               <option value="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">System Default</option>
@@ -238,16 +238,24 @@
               class="settings-label"
               :class="{ 'settings-label-disabled': settings.ui.theme !== 'dark' }"
               for="ui-invert-pdf"
-              title="Only applies with the dark theme"
             >Invert PDF colors</label>
             <input
               id="ui-invert-pdf"
               type="checkbox"
               :checked="settings.ui.invertPdf"
               :disabled="settings.ui.theme !== 'dark'"
+              aria-describedby="ui-invert-pdf-hint"
               @change="updateSetting('ui.invertPdf', $event.target.checked)"
             >
           </div>
+          <p
+            id="ui-invert-pdf-hint"
+            class="settings-hint settings-row-hint"
+          >
+            {{ settings.ui.theme === 'dark'
+              ? 'Shows PDF pages and rendered documents light-on-dark. Your notes on the page switch to light text too.'
+              : 'Available with the dark theme.' }}
+          </p>
           
           <div class="settings-row">
             <label class="settings-label">Default Sidebar Width</label>
@@ -279,6 +287,7 @@
 import { ref, computed } from 'vue'
 import { useStore } from 'vuex'
 import { createDefaultSettings } from '../../common/constants'
+import { fontOptionValue } from '../utils/fonts'
 import AiChatSettings from './AiChatSettings.vue'
 import ChatToolsSettings from './ChatToolsSettings.vue'
 
@@ -345,7 +354,8 @@ export default {
       updateLatexMacros,
       captureShortcut,
       resetToDefaults,
-      saveAndClose
+      saveAndClose,
+      fontOptionValue
     }
   }
 }
@@ -377,6 +387,10 @@ export default {
 
 .settings-label-disabled {
   color: var(--text-muted);
+}
+
+.settings-row-hint {
+  margin: -8px 0 12px;
 }
 
 .shortcut-input {
