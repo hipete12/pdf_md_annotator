@@ -10,7 +10,7 @@
       :disabled="disabled"
       @click="toggle"
     >
-      <span class="model-picker-name">{{ current.model || 'Choose a model' }}</span>
+      <span class="model-picker-name">{{ formatModelLabel(current.model, current.effort) || 'Choose a model' }}</span>
       <svg
         viewBox="0 0 16 16"
         aria-hidden="true"
@@ -24,105 +24,175 @@
       aria-label="Model for this session"
       @keydown.esc.stop.prevent="close"
     >
-      <div class="model-picker-head">
-        <select
-          v-model="providerId"
-          class="model-picker-provider"
-          aria-label="Provider"
-        >
-          <option
-            v-for="p in providers"
-            :key="p.id"
-            :value="p.id"
-          >
-            {{ p.label }}
-          </option>
-        </select>
-        <input
-          ref="search"
-          v-model="query"
-          class="model-picker-search"
-          type="text"
-          placeholder="Search or type a model id"
-          spellcheck="false"
-          @keydown.enter.prevent="chooseFirst"
-          @keydown.down.prevent="focusList"
-        >
-      </div>
-
-      <button
-        class="model-picker-default"
-        :class="{ active: current.isDefault }"
-        @click="useDefault"
-      >
-        <span>Use default</span>
-        <span class="model-picker-sub">{{ defaultLabel }}</span>
-      </button>
-
-      <div
-        ref="list"
-        class="model-picker-list"
-      >
-        <p
-          v-if="loading"
-          class="model-picker-note"
-        >
-          Loading models…
-        </p>
-        <p
-          v-else-if="error"
-          class="model-picker-note error"
-        >
-          {{ error }}
+      <!-- Step 2: thinking effort of the chosen model -->
+      <template v-if="effortTarget">
+        <div class="model-picker-effort-head">
           <button
-            class="model-picker-link"
-            @click="load(true)"
+            class="model-picker-back"
+            title="Back to the model list"
+            aria-label="Back to the model list"
+            @click="effortTarget = null"
           >
-            Retry
+            ‹
           </button>
-        </p>
+          <div class="model-picker-effort-title">
+            <span>Thinking effort</span>
+            <span class="model-picker-sub">{{ effortTarget.model }}</span>
+          </div>
+        </div>
+        <div
+          ref="effortList"
+          class="model-picker-list"
+          role="listbox"
+          aria-label="Thinking effort"
+        >
+          <button
+            class="model-picker-item"
+            :class="{ active: effortTarget.effort === null }"
+            role="option"
+            :aria-selected="effortTarget.effort === null"
+            @click="chooseEffort(null)"
+          >
+            <span class="model-picker-item-name">Default</span>
+            <span class="model-picker-sub">{{ effortTarget.defaultEffort ? `the model's default (${effortTarget.defaultEffort})` : 'the model decides' }}</span>
+          </button>
+          <button
+            v-for="level in effortTarget.efforts"
+            :key="level"
+            class="model-picker-item"
+            :class="{ active: effortTarget.effort === level }"
+            role="option"
+            :aria-selected="effortTarget.effort === level"
+            @click="chooseEffort(level)"
+          >
+            <span class="model-picker-item-name">{{ level }}</span>
+            <span class="model-picker-sub">{{ effortHint(level) }}</span>
+          </button>
+          <p
+            v-if="effortTarget.guessed"
+            class="model-picker-note"
+          >
+            The provider does not list these levels; they are typical for this model family.
+          </p>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="model-picker-head">
+          <select
+            v-model="providerId"
+            class="model-picker-provider"
+            aria-label="Provider"
+          >
+            <option
+              v-for="p in providers"
+              :key="p.id"
+              :value="p.id"
+            >
+              {{ p.label }}
+            </option>
+          </select>
+          <input
+            ref="search"
+            v-model="query"
+            class="model-picker-search"
+            type="text"
+            placeholder="Search or type a model id"
+            spellcheck="false"
+            @keydown.enter.prevent="chooseFirst"
+            @keydown.down.prevent="focusList"
+          >
+        </div>
 
         <button
-          v-for="m in filtered"
-          :key="m.id"
-          class="model-picker-item"
-          :class="{ active: !current.isDefault && current.providerId === providerId && current.model === m.id }"
-          :title="m.id"
-          @click="choose(m.id)"
+          class="model-picker-default"
+          :class="{ active: current.isDefault }"
+          @click="useDefault"
         >
-          <span class="model-picker-item-name">{{ m.name }}</span>
-          <span
-            v-if="m.name !== m.id"
-            class="model-picker-sub"
-          >{{ m.id }}</span>
-          <span class="model-picker-badges">
-            <span
-              v-if="m.vision"
-              class="model-picker-badge"
-            >vision</span>
-            <span
-              v-if="m.contextLength"
-              class="model-picker-badge muted"
-            >{{ formatContext(m.contextLength) }}</span>
-          </span>
+          <span>Use default</span>
+          <span class="model-picker-sub">{{ defaultLabel }}</span>
         </button>
 
+        <!-- The current model takes an effort: change it without re-picking -->
         <button
-          v-if="customId"
-          class="model-picker-item"
-          @click="choose(customId)"
+          v-if="currentEfforts"
+          class="model-picker-default model-picker-effort-row"
+          @click="openEffort(current.providerId, current.model, currentInfo)"
         >
-          <span class="model-picker-item-name">Use “{{ customId }}”</span>
-          <span class="model-picker-sub">model id not in the list</span>
+          <span>Thinking effort</span>
+          <span class="model-picker-sub">{{ current.effort || 'Default' }} ›</span>
         </button>
 
-        <p
-          v-if="!loading && !error && models.length === 0 && !customId"
-          class="model-picker-note"
+        <div
+          ref="list"
+          class="model-picker-list"
         >
-          No models listed. Type a model id above.
-        </p>
-      </div>
+          <p
+            v-if="loading"
+            class="model-picker-note"
+          >
+            Loading models…
+          </p>
+          <p
+            v-else-if="error"
+            class="model-picker-note error"
+          >
+            {{ error }}
+            <button
+              class="model-picker-link"
+              @click="load(true)"
+            >
+              Retry
+            </button>
+          </p>
+
+          <button
+            v-for="m in filtered"
+            :key="m.id"
+            class="model-picker-item"
+            :class="{ active: !current.isDefault && current.providerId === providerId && current.model === m.id }"
+            :title="m.id"
+            @click="choose(m.id)"
+          >
+            <span class="model-picker-item-name">{{ m.name }}</span>
+            <span
+              v-if="m.name !== m.id"
+              class="model-picker-sub"
+            >{{ m.id }}</span>
+            <span class="model-picker-badges">
+              <span
+                v-if="m.efforts"
+                class="model-picker-badge thinking"
+                :title="`Thinking effort: ${m.efforts.join(', ')}`"
+              >thinking</span>
+              <span
+                v-if="m.vision"
+                class="model-picker-badge"
+              >vision</span>
+              <span
+                v-if="m.contextLength"
+                class="model-picker-badge muted"
+              >{{ formatContext(m.contextLength) }}</span>
+            </span>
+          </button>
+
+          <button
+            v-if="customId"
+            class="model-picker-item"
+            @click="choose(customId)"
+          >
+            <span class="model-picker-item-name">Use “{{ customId }}”</span>
+            <span class="model-picker-sub">model id not in the list</span>
+          </button>
+
+          <p
+            v-if="!loading && !error && models.length === 0 && !customId"
+            class="model-picker-note"
+          >
+            No models listed. Type a model id above.
+          </p>
+        </div>
+      </template>
     </div>
   </div>
 </template>
@@ -130,7 +200,18 @@
 <script>
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useStore } from 'vuex'
-import { LLM_PROVIDERS } from '../../../common/llm'
+import { LLM_PROVIDERS, formatModelLabel } from '../../../common/llm'
+
+// Short description of each effort level in the picker
+const EFFORT_HINTS = {
+  none: 'no thinking',
+  minimal: 'barely thinks',
+  low: 'quick',
+  medium: 'balanced',
+  high: 'thorough',
+  xhigh: 'very thorough',
+  max: 'thinks the longest'
+}
 
 export default {
   name: 'ChatModelPicker',
@@ -144,13 +225,18 @@ export default {
     const root = ref(null)
     const search = ref(null)
     const list = ref(null)
+    const effortList = ref(null)
     const open = ref(false)
+    // Effort step: { providerId, model, efforts, defaultEffort, effort, guessed }
+    const effortTarget = ref(null)
     const query = ref('')
     const loading = ref(false)
     const error = ref('')
     const providers = Object.values(LLM_PROVIDERS)
 
     const current = computed(() => store.getters['chat/sessionModel'])
+    const currentInfo = computed(() => store.getters['chat/sessionModelInfo'])
+    const currentEfforts = computed(() => currentInfo.value?.efforts?.length ? currentInfo.value.efforts : null)
     const providerId = ref(current.value.providerId)
     const models = computed(() => store.state.llmModels[providerId.value] || [])
 
@@ -173,14 +259,18 @@ export default {
     const defaultLabel = computed(() => {
       const llm = store.state.settings.llm
       const model = llm.models?.[llm.provider]
-      return model ? `${LLM_PROVIDERS[llm.provider]?.label || llm.provider} · ${model}` : 'not set in Settings'
+      return model
+        ? `${LLM_PROVIDERS[llm.provider]?.label || llm.provider} · ${formatModelLabel(model, llm.efforts?.[llm.provider])}`
+        : 'not set in Settings'
     })
 
     const buttonTitle = computed(() => {
       const label = LLM_PROVIDERS[current.value.providerId]?.label || current.value.providerId
+      const name = formatModelLabel(current.value.model, current.value.effort)
+      const effort = current.value.effort ? `, thinking effort ${current.value.effort}` : ''
       return current.value.isDefault
-        ? `Model: ${current.value.model || 'none'} (${label}, default from Settings). Click to choose a model for this session.`
-        : `Model for this session: ${current.value.model} (${label}). Click to change.`
+        ? `Model: ${name || 'none'} (${label}${effort}, default from Settings). Click to choose a model for this session.`
+        : `Model for this session: ${name} (${label}${effort}). Click to change.`
     })
 
     const load = async (force = false) => {
@@ -208,6 +298,7 @@ export default {
       if (open.value) return close()
       providerId.value = current.value.providerId
       query.value = ''
+      effortTarget.value = null
       open.value = true
       document.addEventListener('mousedown', onDocumentMouseDown, true)
       await nextTick()
@@ -217,13 +308,48 @@ export default {
 
     function close() {
       open.value = false
+      effortTarget.value = null
       document.removeEventListener('mousedown', onDocumentMouseDown, true)
     }
 
+    // Show the effort step for a model that takes one
+    const openEffort = async (provider, model, info) => {
+      const sameModel = current.value.providerId === provider && current.value.model === model
+      effortTarget.value = {
+        providerId: provider,
+        model,
+        efforts: info.efforts,
+        defaultEffort: info.defaultEffort || null,
+        effort: sameModel ? current.value.effort : null,
+        guessed: info.effortSource === 'guess'
+      }
+      await nextTick()
+      const buttons = effortList.value?.querySelectorAll('.model-picker-item') || []
+      ;(effortList.value?.querySelector('.model-picker-item.active') || buttons[0])?.focus()
+    }
+
     const choose = (model) => {
+      const info = models.value.find(m => m.id === model)
+      if (info?.efforts?.length) {
+        // Apply the model now (closing the menu keeps it), keeping the
+        // current effort when the new model accepts it, then offer efforts
+        const keep = info.efforts.includes(current.value.effort) ? current.value.effort : null
+        store.dispatch('chat/setSessionModel', { providerId: providerId.value, model, effort: keep })
+        openEffort(providerId.value, model, info)
+        return
+      }
       store.dispatch('chat/setSessionModel', { providerId: providerId.value, model })
       close()
     }
+
+    const chooseEffort = (effort) => {
+      const target = effortTarget.value
+      if (!target) return
+      store.dispatch('chat/setSessionModel', { providerId: target.providerId, model: target.model, effort })
+      close()
+    }
+
+    const effortHint = (level) => EFFORT_HINTS[level] || ''
 
     const useDefault = () => {
       store.dispatch('chat/setSessionModel', { providerId: null, model: null })
@@ -245,6 +371,10 @@ export default {
       root,
       search,
       list,
+      effortList,
+      effortTarget,
+      currentInfo,
+      currentEfforts,
       open,
       query,
       loading,
@@ -261,6 +391,10 @@ export default {
       toggle,
       close,
       choose,
+      openEffort,
+      chooseEffort,
+      effortHint,
+      formatModelLabel,
       useDefault,
       chooseFirst,
       focusList,
@@ -443,6 +577,53 @@ export default {
   border-radius: 999px;
   color: var(--success-color);
   font-size: 10px;
+}
+
+.model-picker-badge.thinking {
+  border-color: var(--context-reply);
+  color: var(--context-reply);
+}
+
+.model-picker-effort-row {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.model-picker-effort-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.model-picker-back {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: none;
+  color: var(--text-color);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.model-picker-back:hover {
+  background: var(--sidebar-bg);
+}
+
+.model-picker-effort-title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.model-picker-effort-title .model-picker-sub {
+  font-weight: normal;
 }
 
 .model-picker-badge.muted {

@@ -28,6 +28,7 @@ conversation into a Quarto document.
   - OpenRouter, OpenAI, OpenCode Go, local Ollama / LM Studio, or any OpenAI-compatible API
   - The document text is included automatically; select text or click a note to attach it as context
   - Multiple sessions per document, resizable panel, full-screen mode
+  - Thinking effort for models that support it (shown as `model:effort`, e.g. `glm-5.3:max`)
   - Optional page images for vision-capable models
   - Optional web search and page reading through Tavily
 - **Standalone chats** (`Ctrl+N`): a full-window chat without a PDF, saved as `untitled1.chat`, …
@@ -184,6 +185,23 @@ obfuscated; the settings page warns about this.
 **Model per session.** The model button under the chat box picks the provider and model
 for the current session; it is remembered with that session (also after a restart) until
 changed. New sessions start with the default model from Settings.
+
+**Thinking effort.** Models that accept a reasoning effort show a *thinking* badge in the
+picker. Choosing one opens a second step with its levels (e.g. low / high / max, or
+*Default* to let the model decide); the button then reads `model:effort`, and replies are
+labelled the same way. Reopen the picker to change the effort without picking the model
+again. **Settings → AI Chat → Thinking effort** sets it for the default model. The levels
+come from the provider:
+
+| Provider | Where the levels come from | Sent as |
+|----------|----------------------------|---------|
+| OpenRouter | `reasoning.supported_efforts` in the model list | `reasoning: { effort }` |
+| OpenCode Go | `capabilities.reasoning.effort` in the model list | `reasoning_effort` |
+| Ollama | `thinking` in `/api/show` (on/off models: none / high) | `reasoning_effort` |
+| LM Studio (0.4.8+) | `capabilities.reasoning` in `/api/v1/models` | `reasoning_effort` |
+| OpenAI, Custom | guessed from the model id for reasoning models (low / medium / high) | `reasoning_effort` |
+
+If a model rejects the chosen level, the error says so; pick *Default* in the picker.
 
 **Regenerate and branches.** *Regenerate* on a reply (or the pencil on your message)
 turns your message into an edit box: change it and press Enter to get a new reply, or Esc /

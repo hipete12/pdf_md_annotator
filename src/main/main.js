@@ -599,7 +599,7 @@ ipcMain.handle('llm:list-models', async (event, { providerId, baseUrl }) => {
 // carrying it. With webTools the reply runs as an agent loop (agent.js).
 const activeChats = new Map()
 
-ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, messages, temperature, sessionId, webTools }) => {
+ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model, reasoningEffort, messages, temperature, sessionId, webTools }) => {
   if (!requestId || activeChats.has(requestId)) return { started: false, error: 'Invalid request id' }
 
   const controller = new AbortController()
@@ -620,6 +620,7 @@ ipcMain.handle('llm:chat-start', (event, { requestId, providerId, baseUrl, model
       baseUrl,
       apiKey: secrets.getKey(providerId),
       model,
+      reasoningEffort: typeof reasoningEffort === 'string' && reasoningEffort ? reasoningEffort : undefined,
       temperature,
       sessionId,
       userAgent: LLM_USER_AGENT,

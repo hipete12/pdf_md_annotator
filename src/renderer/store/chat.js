@@ -36,6 +36,23 @@ function setActiveChild(session, parentId, childId) {
   }
 }
 
+/**
+ * Provider, model and thinking effort a session talks to: its own choice,
+ * else the default from Settings (isDefault tells the UI which one applies).
+ * effort null = the model's own default.
+ */
+export function modelForSession(session, llm) {
+  if (session?.provider && session?.model) {
+    return { providerId: session.provider, model: session.model, effort: session.effort || null, isDefault: false }
+  }
+  return {
+    providerId: llm.provider,
+    model: llm.models?.[llm.provider] || '',
+    effort: llm.efforts?.[llm.provider] || null,
+    isDefault: true
+  }
+}
+
 function findMessage(state, sessionId, messageId) {
   return findSession(state, sessionId)?.messages.find(m => m.id === messageId) || null
 }
@@ -57,6 +74,8 @@ export function sanitizeSessions(data) {
       // Model chosen for this session; null follows the default from Settings
       provider: typeof s.provider === 'string' && LLM_PROVIDERS[s.provider] ? s.provider : null,
       model: typeof s.model === 'string' && s.model ? s.model : null,
+      // Thinking effort for that model; null = the model's default
+      effort: typeof s.effort === 'string' && s.effort ? s.effort : null,
       // /generate history shown in the conversation, and what the document
       // covered last time (standalone chats)
       docEvents: Array.isArray(s.docEvents)
@@ -109,14 +128,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       // true / false / null (unknown) for the selected model
       // Provider + model for the active session: its own choice, else the
       // default from Settings. isDefault tells the UI which one applies.
-      sessionModel: (state, getters, rootState) => {
-        const llm = rootState.settings.llm
-        const session = getters.activeSession
-        if (session?.provider && session?.model) {
-          return { providerId: session.provider, model: session.model, isDefault: false }
-        }
-        return { providerId: llm.provider, model: llm.models?.[llm.provider] || '', isDefault: true }
-      },
+      sessionModel: (state, getters, rootState) => modelForSession(getters.activeSession, rootState.settings.llm),
       // Model entry (from the loaded model list) for the active session, if known
       sessionModelInfo: (state, getters, rootState) => {
         const { providerId, model } = getters.sessionModel
@@ -177,11 +189,12 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       SET_ACTIVE(state, id) {
         state.activeSessionId = id
       },
-      SET_SESSION_MODEL(state, { id, providerId, model }) {
+      SET_SESSION_MODEL(state, { id, providerId, model, effort = null }) {
         const session = findSession(state, id)
         if (!session) return
         session.provider = providerId || null
         session.model = providerId && model ? model : null
+        session.effort = session.model && effort ? effort : null
       },
       SET_SESSION_WEB(state, { id, value }) {
         const session = findSession(state, id)
@@ -459,8 +472,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           ? `${template}\n\n${llm.toolsInstruction}`
           : template)
         // The session's own model when chosen, else the Settings default
-        const providerId = session.provider && session.model ? session.provider : llm.provider
-        const model = session.provider && session.model ? session.model : (llm.models?.[llm.provider] || '')
+        const { providerId, model, effort } = modelForSession(session, llm)
 
         const assistantMessage = {
           id: uuidv4(),
@@ -470,6 +482,8 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           content: '',
           reasoning: '',
           model,
+          // Thinking effort the reply was requested with (shown as model:effort)
+          effort,
           created: now(),
           pending: true
         }
@@ -574,6 +588,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           providerId,
           baseUrl: llm.baseUrls?.[providerId],
           model,
+          reasoningEffort: effort,
           messages,
           temperature: llm.temperature,
           webTools,
@@ -621,14 +636,23 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
 
       // Choose the model for the active session (null/empty = Settings default).
       // Remembered with the session until changed.
-      async setSessionModel({ commit, getters, dispatch }, { providerId = null, model = null } = {}) {
+      async setSessionModel({ commit, getters, dispatch }, { providerId = null, model = null, effort = null } = {}) {
         let session = getters.activeSession
         if (!session) {
           await dispatch('newSession')
           session = getters.activeSession
         }
-        commit('SET_SESSION_MODEL', { id: session.id, providerId, model })
+        commit('SET_SESSION_MODEL', { id: session.id, providerId, model, effort })
         if (session.messages.length) return dispatch('persist')
+      },
+
+      // Change the thinking effort of the active session's model (null = the
+      // model's default). On the Settings default model this makes the model
+      // the session's own choice, so Settings stay as they are.
+      setSessionEffort({ getters, dispatch }, effort = null) {
+        const { providerId, model } = getters.sessionModel
+        if (!model) return
+        return dispatch('setSessionModel', { providerId, model, effort })
       },
 
       // Fetch (and cache in the root store) the model list of a provider
@@ -766,7 +790,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       async generateDocument({ commit, dispatch, state, getters, rootState }, { steer = '' } = {}) {
         const session = getters.activeSession
         if (!getters.isStandalone || !session || state.streaming || state.generating) return false
-        const { providerId, model } = getters.sessionModel
+        const { providerId, model, effort } = getters.sessionModel
         if (!model) {
           commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
           return false
@@ -814,6 +838,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           providerId,
           baseUrl: llm.baseUrls?.[providerId],
           model,
+          reasoningEffort: effort,
           messages,
           temperature: llm.temperature,
           webTools: false,

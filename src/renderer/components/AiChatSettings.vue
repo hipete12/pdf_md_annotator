@@ -144,6 +144,46 @@
       {{ connection.message }}
     </p>
 
+    <!-- Thinking effort, for models that accept one -->
+    <div
+      v-if="modelEfforts"
+      class="settings-row"
+    >
+      <label
+        class="settings-label"
+        for="ai-effort"
+      >Thinking effort</label>
+      <div class="ai-inline">
+        <span
+          class="ai-muted ai-model-label"
+          :title="`Chats use ${modelLabel}`"
+        >{{ modelLabel }}</span>
+        <select
+          id="ai-effort"
+          class="settings-input ai-narrow"
+          :value="effort || ''"
+          @change="setEffort($event.target.value)"
+        >
+          <option value="">
+            Default{{ selectedModel?.defaultEffort ? ` (${selectedModel.defaultEffort})` : '' }}
+          </option>
+          <option
+            v-for="level in modelEfforts"
+            :key="level"
+            :value="level"
+          >
+            {{ level }}
+          </option>
+        </select>
+      </div>
+    </div>
+    <p
+      v-if="modelEfforts && selectedModel?.effortSource === 'guess'"
+      class="settings-hint"
+    >
+      {{ provider.label }} does not list thinking levels; these are typical for this model family.
+    </p>
+
     <div
       v-if="modelId"
       class="settings-row"
@@ -331,7 +371,7 @@
 <script>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useStore } from 'vuex'
-import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
+import { formatModelLabel, LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
 import { DEFAULT_SETTINGS } from '../../common/constants'
 
 let ipcRenderer = null
@@ -378,8 +418,26 @@ export default {
       connection.value = { ok: false, message: '' }
     }
 
+    // Thinking effort of the default model (llm.efforts[provider])
+    const effort = computed(() => llm.value.efforts?.[provider.value.id] || null)
+    const modelEfforts = computed(() => selectedModel.value?.efforts?.length ? selectedModel.value.efforts : null)
+    const modelLabel = computed(() => formatModelLabel(modelId.value, effort.value))
+    const setEffort = (value) => {
+      const next = { ...(llm.value.efforts || {}) }
+      if (value) next[provider.value.id] = value
+      else delete next[provider.value.id]
+      updateSetting('llm.efforts', next)
+    }
+
     const setBaseUrl = (url) => updateMap('baseUrls', provider.value.id, url.trim())
-    const setModel = (id) => updateMap('models', provider.value.id, id.trim())
+    const setModel = (id) => {
+      const next = id.trim()
+      updateMap('models', provider.value.id, next)
+      // Keep the thinking effort only if the new model accepts it
+      const info = models.value.find(m => m.id === next)
+      if (effort.value && !info?.efforts?.includes(effort.value)) setEffort('')
+    }
+
 
     const visionOverride = computed(() => {
       const value = llm.value.visionOverrides?.[modelId.value]
@@ -476,6 +534,11 @@ export default {
       baseUrl,
       modelId,
       models,
+      selectedModel,
+      effort,
+      modelEfforts,
+      modelLabel,
+      setEffort,
       keyDraft,
       hasKey,
       keyStorageWeak,
@@ -543,6 +606,14 @@ export default {
 
 .ai-muted {
   color: var(--text-muted);
+}
+
+.ai-model-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
 }
 
 

@@ -358,10 +358,10 @@ describe('Branches', () => {
 describe('Per-session model', () => {
   it('uses the Settings default until the session picks its own model', async () => {
     const { store, ipc } = await setup()
-    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'custom', model: 'test-model', isDefault: true })
+    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'custom', model: 'test-model', effort: null, isDefault: true })
 
     await store.dispatch('chat/setSessionModel', { providerId: 'opencodego', model: 'kimi-k3' })
-    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'opencodego', model: 'kimi-k3', isDefault: false })
+    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'opencodego', model: 'kimi-k3', effort: null, isDefault: false })
 
     await store.dispatch('chat/sendMessage', { text: 'hi' })
     const start = ipc.lastCall('llm:chat-start').payload
@@ -419,6 +419,58 @@ describe('Per-session model', () => {
     expect(store.getters['chat/modelVision']).to.equal(null) // test-model: unknown
     await store.dispatch('chat/setSessionModel', { providerId: 'openai', model: 'gpt-4o' })
     expect(store.getters['chat/modelVision']).to.equal(true)
+  })
+})
+
+describe('Thinking effort', () => {
+  it('sends the session effort and shows it on the reply', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/setSessionModel', { providerId: 'opencodego', model: 'glm-5.3', effort: 'max' })
+    expect(store.getters['chat/sessionModel']).to.include({ model: 'glm-5.3', effort: 'max', isDefault: false })
+
+    await store.dispatch('chat/sendMessage', { text: 'hi' })
+    const start = ipc.lastCall('llm:chat-start').payload
+    expect(start).to.include({ providerId: 'opencodego', model: 'glm-5.3', reasoningEffort: 'max' })
+    expect(store.getters['chat/activeSession'].messages[1]).to.include({ model: 'glm-5.3', effort: 'max' })
+  })
+
+  it('uses the Settings effort for the default model and sends none when unset', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/sendMessage', { text: 'no effort' })
+    expect(ipc.lastCall('llm:chat-start').payload.reasoningEffort).to.equal(null)
+    ipc.emit('llm:chat-done', { requestId: ipc.lastCall('llm:chat-start').payload.requestId })
+    await tick()
+
+    store.commit('SET_SETTING', { path: 'llm.efforts', value: { custom: 'high' } })
+    expect(store.getters['chat/sessionModel']).to.include({ model: 'test-model', effort: 'high', isDefault: true })
+    await store.dispatch('chat/sendMessage', { text: 'with effort' })
+    expect(ipc.lastCall('llm:chat-start').payload.reasoningEffort).to.equal('high')
+  })
+
+  it('changing the effort on the default model makes it the session\'s own choice', async () => {
+    const { store } = await setup()
+    store.commit('SET_SETTING', { path: 'llm.efforts', value: { custom: 'high' } })
+    await store.dispatch('chat/setSessionEffort', 'low')
+    expect(store.getters['chat/sessionModel']).to.deep.equal({ providerId: 'custom', model: 'test-model', effort: 'low', isDefault: false })
+    // Settings keep their own effort
+    expect(store.state.settings.llm.efforts.custom).to.equal('high')
+  })
+
+  it('is saved with the session and dropped when the session goes back to the default', async () => {
+    const { store, ipc } = await setup()
+    await store.dispatch('chat/setSessionModel', { providerId: 'openrouter', model: 'a/b', effort: 'xhigh' })
+    await store.dispatch('chat/sendMessage', { text: 'first' })
+    ipc.emit('llm:chat-done', { requestId: ipc.lastCall('llm:chat-start').payload.requestId })
+    await tick()
+    expect(ipc.lastCall('chat:save').payload.data.sessions[0]).to.include({ model: 'a/b', effort: 'xhigh' })
+
+    await store.dispatch('chat/setSessionModel', { providerId: null, model: null, effort: 'xhigh' })
+    expect(store.getters['chat/activeSession'].effort).to.equal(null)
+
+    const [loaded] = sanitizeSessions({ sessions: [{ id: 'a', provider: 'openai', model: 'gpt-5.4', effort: 'high', messages: [] }] })
+    expect(loaded.effort).to.equal('high')
+    const [old] = sanitizeSessions({ sessions: [{ id: 'b', provider: 'openai', model: 'gpt-4o', messages: [] }] })
+    expect(old.effort).to.equal(null)
   })
 })
 

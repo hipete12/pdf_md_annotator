@@ -11,8 +11,9 @@ const os = require('os')
 /**
  * Fake LLM. respond(body, index) returns a string (streamed as the reply) or
  * { content, toolCalls: [{ id, name, arguments }], finishReason }.
+ * options.models: entries returned by GET /models (OpenRouter-style fields work)
  */
-function startFakeLlm(respond) {
+function startFakeLlm(respond, { models = [{ id: 'fake-model' }] } = {}) {
   const requests = []
   const server = http.createServer((req, res) => {
     let raw = ''
@@ -22,7 +23,7 @@ function startFakeLlm(respond) {
       requests.push({ url: req.url, body })
       if (req.url.endsWith('/models')) {
         res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify({ data: [{ id: 'fake-model' }] }))
+        res.end(JSON.stringify({ data: models }))
         return
       }
       const chatIndex = requests.filter(r => r.url.endsWith('/chat/completions')).length - 1

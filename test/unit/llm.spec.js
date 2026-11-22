@@ -12,7 +12,13 @@ import {
   describeNetworkError,
   joinUrl,
   getModelsUrl,
-  LLM_PROVIDERS
+  LLM_PROVIDERS,
+  sortEfforts,
+  guessReasoningEfforts,
+  parseOllamaThinking,
+  parseLmStudioReasoning,
+  reasoningRequestFields,
+  formatModelLabel
 } from '../../src/common/llm'
 import { DEFAULT_SETTINGS } from '../../src/common/constants'
 const { listModels, streamChat } = require('../../src/main/llm')
@@ -71,6 +77,88 @@ describe('LLM helpers', () => {
     it('tolerates odd shapes', () => {
       expect(normalizeModelList(null)).to.deep.equal([])
       expect(normalizeModelList({ data: [{}, null, 'm1'] }).map(m => m.id)).to.deep.equal(['m1'])
+    })
+  })
+
+  describe('reasoning effort', () => {
+    it('reads OpenRouter supported efforts (sorted low to high) and the default', () => {
+      const [m] = normalizeModelList({
+        data: [{ id: 'x/y', reasoning: { mandatory: false, supported_efforts: ['max', 'high', 'medium', 'low', 'none'], default_effort: 'medium' } }]
+      })
+      expect(m).to.include({ defaultEffort: 'medium', effortSource: 'provider' })
+      expect(m.efforts).to.deep.equal(['none', 'low', 'medium', 'high', 'max'])
+    })
+
+    it('reads OpenCode Go capabilities.reasoning effort and its default', () => {
+      const [a, b, c] = normalizeModelList({
+        data: [
+          { id: 'glm-5.3', capabilities: { reasoning: { supported: true, effort: ['low', 'high', 'max'] } } },
+          { id: 'kimi-k3.1-pro', capabilities: { reasoning: { supported: true, default: { type: 'effort', value: 'max' }, effort: ['low', 'high', 'max'] } } },
+          { id: 'mimo-v2.6-pro', capabilities: { reasoning: { supported: true } } }
+        ]
+      })
+      expect(a.efforts).to.deep.equal(['low', 'high', 'max'])
+      expect(a.defaultEffort).to.equal(null)
+      expect(b).to.include({ id: 'kimi-k3.1-pro', defaultEffort: 'max' })
+      // Reasoning without levels (on/off or budget only): nothing to choose
+      expect(c).to.include({ id: 'mimo-v2.6-pro', efforts: null, effortSource: 'provider' })
+    })
+
+    it('does not guess when the provider reports reasoning info', () => {
+      const [m] = normalizeModelList({ data: [{ id: 'openai/o3', reasoning: { mandatory: true } }] })
+      expect(m).to.include({ efforts: null, effortSource: 'provider' })
+    })
+
+    it('guesses conservative levels from OpenAI-style ids only', () => {
+      expect(guessReasoningEfforts('gpt-5.4')).to.deep.equal(['low', 'medium', 'high'])
+      expect(guessReasoningEfforts('gpt-6-luna')).to.deep.equal(['low', 'medium', 'high'])
+      expect(guessReasoningEfforts('gpt-5.4-pro')).to.deep.equal(['high'])
+      expect(guessReasoningEfforts('o3')).to.deep.equal(['low', 'medium', 'high'])
+      expect(guessReasoningEfforts('openai/gpt-oss-20b')).to.deep.equal(['low', 'medium', 'high'])
+      expect(guessReasoningEfforts('gpt-oss:20b')).to.deep.equal(['low', 'medium', 'high'])
+      for (const id of ['gpt-4o', 'gpt-chat-latest', 'gpt-5.2-chat', 'o1-mini', 'gpt-audio', 'llama3.1', 'gpt-5-image']) {
+        expect(guessReasoningEfforts(id), id).to.equal(null)
+      }
+      const [plain] = normalizeModelList({ data: [{ id: 'gpt-5.4' }] })
+      expect(plain).to.include({ effortSource: 'guess' })
+      const [none] = normalizeModelList({ data: [{ id: 'gpt-4o' }] })
+      expect(none).to.include({ efforts: null, effortSource: 'unknown' })
+    })
+
+    it('reads Ollama /api/show thinking levels and on/off switches', () => {
+      expect(parseOllamaThinking({ values: ['low', 'medium', 'high'], default: 'medium' }))
+        .to.deep.equal({ efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' })
+      expect(parseOllamaThinking({ values: [true, false], default: true }))
+        .to.deep.equal({ efforts: ['none', 'high'], defaultEffort: 'high' })
+      expect(parseOllamaThinking({ values: [false] })).to.deep.equal({ efforts: null, defaultEffort: null })
+      expect(parseOllamaThinking(undefined)).to.equal(null)
+    })
+
+    it('reads LM Studio capabilities.reasoning options', () => {
+      expect(parseLmStudioReasoning({ allowed_options: ['off', 'on'], default: 'on' }))
+        .to.deep.equal({ efforts: ['none', 'high'], defaultEffort: 'high' })
+      expect(parseLmStudioReasoning({ allowed_options: ['off', 'low', 'medium', 'high', 'on'], default: 'medium' }))
+        .to.deep.equal({ efforts: ['none', 'low', 'medium', 'high'], defaultEffort: 'medium' })
+      expect(parseLmStudioReasoning({ allowed_options: ['on'], default: 'on' }).efforts).to.equal(null)
+      expect(parseLmStudioReasoning(null)).to.equal(null)
+    })
+
+    it('builds the request fields per provider and the model:effort label', () => {
+      expect(reasoningRequestFields('openrouter', 'high')).to.deep.equal({ reasoning: { effort: 'high' } })
+      for (const id of ['openai', 'opencodego', 'ollama', 'lmstudio', 'custom']) {
+        expect(reasoningRequestFields(id, 'max'), id).to.deep.equal({ reasoning_effort: 'max' })
+      }
+      expect(reasoningRequestFields('openai', null)).to.deep.equal({})
+      expect(formatModelLabel('glm-5.3', 'max')).to.equal('glm-5.3:max')
+      expect(formatModelLabel('glm-5.3', null)).to.equal('glm-5.3')
+      expect(formatModelLabel('', 'max')).to.equal('')
+      expect(sortEfforts(['max', 'custom', 'low', 'low'])).to.deep.equal(['low', 'max', 'custom'])
+    })
+
+    it('blames the effort for a rejected request only when one was sent', () => {
+      const body = JSON.stringify({ error: { message: 'Unsupported value: reasoning_effort "max"' } })
+      expect(describeHttpError(400, body, 'X', { effort: 'max' }).code).to.equal('effort_unsupported')
+      expect(describeHttpError(400, body, 'X').code).to.equal('http')
     })
   })
 
@@ -223,6 +311,65 @@ describe('LLM client (fake server)', () => {
     const byId = Object.fromEntries(models.map(m => [m.id, m]))
     expect(byId.llava).to.include({ vision: true, visionSource: 'provider' })
     expect(byId['llama3.1']).to.include({ vision: false, visionSource: 'provider' })
+  })
+
+  it('Ollama: thinking levels come from /api/show', async () => {
+    handler = (req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      if (req.url === '/api/show') {
+        const thinking = { 'gpt-oss:20b': { values: ['low', 'medium', 'high'], default: 'medium' }, 'qwen3': { values: [true, false], default: true } }[lastRequest.body.model]
+        return res.end(JSON.stringify({ capabilities: ['completion'], ...(thinking ? { thinking } : {}) }))
+      }
+      res.end(JSON.stringify({ data: [{ id: 'gpt-oss:20b' }, { id: 'qwen3' }, { id: 'llama3.1' }] }))
+    }
+    const byId = Object.fromEntries((await listModels({ providerId: 'ollama', baseUrl })).map(m => [m.id, m]))
+    expect(byId['gpt-oss:20b']).to.include({ defaultEffort: 'medium', effortSource: 'provider' })
+    expect(byId['gpt-oss:20b'].efforts).to.deep.equal(['low', 'medium', 'high'])
+    expect(byId.qwen3.efforts).to.deep.equal(['none', 'high'])
+    expect(byId['llama3.1'].efforts).to.equal(null)
+  })
+
+  it('LM Studio: reasoning options come from /api/v1/models, matched by key', async () => {
+    handler = (req, res) => {
+      // Newer servers may drop the v0 API; reasoning still comes from v1
+      if (req.url === '/api/v0/models') { res.writeHead(404); return res.end() }
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      if (req.url === '/api/v1/models') {
+        return res.end(JSON.stringify({
+          models: [
+            { key: 'google/gemma-4-26b-a4b', capabilities: { reasoning: { allowed_options: ['off', 'on'], default: 'on' } } },
+            { key: 'other', loaded_instances: [{ id: 'nemotron-loaded' }], capabilities: { reasoning: { allowed_options: ['off', 'low', 'medium', 'high'], default: 'low' } } }
+          ]
+        }))
+      }
+      res.end(JSON.stringify({ data: [{ id: 'google/gemma-4-26b-a4b' }, { id: 'nemotron-loaded' }, { id: 'plain' }] }))
+    }
+    const byId = Object.fromEntries((await listModels({ providerId: 'lmstudio', baseUrl })).map(m => [m.id, m]))
+    expect(byId['google/gemma-4-26b-a4b'].efforts).to.deep.equal(['none', 'high'])
+    expect(byId['nemotron-loaded']).to.include({ defaultEffort: 'low' })
+    expect(byId.plain.efforts).to.equal(null)
+  })
+
+  it('sends the effort as reasoning.effort to OpenRouter and reasoning_effort elsewhere', async () => {
+    handler = (req, res) => sse(res, ['[DONE]'])
+    await streamChat({ providerId: 'openrouter', baseUrl, apiKey: 'k', model: 'a/b', messages: [], reasoningEffort: 'xhigh' })
+    expect(lastRequest.body.reasoning).to.deep.equal({ effort: 'xhigh' })
+    expect(lastRequest.body.reasoning_effort).to.equal(undefined)
+
+    await streamChat({ providerId: 'custom', baseUrl, model: 'm', messages: [], reasoningEffort: 'max' })
+    expect(lastRequest.body.reasoning_effort).to.equal('max')
+    expect(lastRequest.body.reasoning).to.equal(undefined)
+  })
+
+  it('explains a rejected effort', async () => {
+    handler = (req, res) => {
+      res.writeHead(400, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: "Unsupported value: 'reasoning_effort' does not support 'max' with this model." } }))
+    }
+    let error
+    try { await streamChat({ providerId: 'openai', baseUrl, apiKey: 'k', model: 'gpt-5.4', messages: [], reasoningEffort: 'max' }) } catch (e) { error = e }
+    expect(error.code).to.equal('effort_unsupported')
+    expect(error.message).to.match(/Default/)
   })
 
   it('streams a chat completion', async () => {
