@@ -4,8 +4,9 @@
  * or deleting pages does not trigger re-extraction.
  */
 
-// WeakMap<PDFDocumentProxy, Map<pageNumber, Promise<string>>>
-const textCache = new WeakMap()
+// WeakMap<PDFDocumentProxy, Map<pageNumber, Promise<Array<{str, hasEOL}>>>>
+// Shared by the chat (page text) and Find (text items)
+const itemsCache = new WeakMap()
 
 /**
  * Join PDF.js text items into plain text, keeping line breaks.
@@ -26,22 +27,33 @@ export function textContentToString(textContent) {
 }
 
 /**
- * Text of one page of a PDF.js document (cached).
+ * Text items of one page of a PDF.js document (cached): the items with a
+ * string, in the order PDF.js renders them as text layer spans.
+ * @returns {Promise<Array<{str: string, hasEOL: boolean}>>}
  */
-export function getPageText(document, pageNumber) {
-  let pages = textCache.get(document)
+export function getPageTextItems(document, pageNumber) {
+  let pages = itemsCache.get(document)
   if (!pages) {
     pages = new Map()
-    textCache.set(document, pages)
+    itemsCache.set(document, pages)
   }
   if (!pages.has(pageNumber)) {
     const promise = document.getPage(pageNumber)
       .then(page => page.getTextContent())
-      .then(textContentToString)
-      .catch(() => '')
+      .then(content => (content?.items || [])
+        .filter(item => typeof item.str === 'string')
+        .map(item => ({ str: item.str, hasEOL: Boolean(item.hasEOL) })))
+      .catch(() => [])
     pages.set(pageNumber, promise)
   }
   return pages.get(pageNumber)
+}
+
+/**
+ * Text of one page of a PDF.js document (cached).
+ */
+export async function getPageText(document, pageNumber) {
+  return textContentToString({ items: await getPageTextItems(document, pageNumber) })
 }
 
 /**

@@ -74,6 +74,9 @@
           @new-chat="newChat"
           @open-recent="openRecent"
         />
+
+        <!-- Find in the PDF (Ctrl+F) -->
+        <PdfSearchBar v-if="pdfDocument && searchOpen" />
       </div>
     
       <!-- Chat (right side, resizable; can go full screen) -->
@@ -104,6 +107,7 @@ import SettingsModal from './components/SettingsModal.vue'
 import ChatPanel from './components/chat/ChatPanel.vue'
 import DocumentViewer from './components/DocumentViewer.vue'
 import TitleBar from './components/TitleBar.vue'
+import PdfSearchBar from './components/PdfSearchBar.vue'
 import { usesCustomTitleBar } from '../common/menuModel'
 
 // Safely get ipcRenderer
@@ -143,7 +147,8 @@ export default {
     SettingsModal,
     ChatPanel,
     DocumentViewer,
-    TitleBar
+    TitleBar,
+    PdfSearchBar
   },
   
   setup() {
@@ -168,6 +173,7 @@ export default {
     const settings = computed(() => store.state.settings)
     const chatVisible = computed(() => Boolean(store.state.settings.chat?.panelVisible))
     const customTitleBar = Boolean(ipcRenderer) && usesCustomTitleBar(process.platform)
+    const searchOpen = computed(() => store.state.search.open)
 
     // Theme classes go on <html> so everything inherits them, including the
     // body background, native form controls and scrollbars (color-scheme)
@@ -178,6 +184,12 @@ export default {
       root.classList.toggle('invert-pdf', isDark.value && Boolean(settings.value?.ui?.invertPdf))
       root.classList.toggle('custom-titlebar', customTitleBar)
     })
+    // A new document closes Find; reordered, deleted or added pages search again
+    watch(pdfDocument, () => store.dispatch('search/close'))
+    watch(() => store.getters.visiblePages, () => {
+      if (searchOpen.value) store.dispatch('search/run')
+    })
+
     // Native UI drawn by Electron (and the window background) follows suit
     watch(isDark, (dark) => {
       ipcRenderer?.send('theme:changed', dark ? 'dark' : 'light')
@@ -221,6 +233,32 @@ export default {
       if (action === 'in') zoomIn()
       else if (action === 'out') zoomOut()
       else zoomReset()
+    }
+
+    // Find in the PDF (Ctrl+F, Edit > Find): opens the search bar, starting
+    // from the PDF text selected on the page, if any
+    const canSearch = () => mode.value === 'pdf' && Boolean(pdfDocument.value) && !settingsModalOpen.value
+
+    const selectedPdfText = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return ''
+      const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement
+      if (!anchor?.closest('.textLayer')) return ''
+      const text = selection.toString().replace(/\s+/g, ' ').trim()
+      return text.length <= 200 ? text : ''
+    }
+
+    const openSearch = () => {
+      if (!canSearch()) return
+      const query = selectedPdfText()
+      store.dispatch('search/open', query ? { query } : {})
+    }
+
+    // F3 / Shift+F3 (Edit > Find Next / Previous): open the bar first if needed
+    const findStep = (direction) => {
+      if (!canSearch()) return
+      if (!searchOpen.value) openSearch()
+      else store.dispatch('search/step', direction)
     }
     
     const openSettings = () => {
@@ -363,6 +401,9 @@ export default {
       toggleSidebar()
     }
     
+    const handleFind = () => openSearch()
+    const handleFindNext = () => findStep(1)
+    const handleFindPrevious = () => findStep(-1)
     const handleZoomIn = () => zoomShortcut('in')
     const handleZoomOut = () => zoomShortcut('out')
     const handleZoomReset = () => zoomShortcut('reset')
@@ -397,6 +438,9 @@ export default {
         ipcRenderer.on('save-file', handleSaveFile)
         ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.on('find', handleFind)
+        ipcRenderer.on('find-next', handleFindNext)
+        ipcRenderer.on('find-previous', handleFindPrevious)
         ipcRenderer.on('zoom-in', handleZoomIn)
         ipcRenderer.on('zoom-out', handleZoomOut)
         ipcRenderer.on('zoom-reset', handleZoomReset)
@@ -421,6 +465,9 @@ export default {
         ipcRenderer.removeListener('save-file', handleSaveFile)
         ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.removeListener('find', handleFind)
+        ipcRenderer.removeListener('find-next', handleFindNext)
+        ipcRenderer.removeListener('find-previous', handleFindPrevious)
         ipcRenderer.removeListener('zoom-in', handleZoomIn)
         ipcRenderer.removeListener('zoom-out', handleZoomOut)
         ipcRenderer.removeListener('zoom-reset', handleZoomReset)
@@ -537,6 +584,24 @@ export default {
       if (e.key === 'Escape' && !e.defaultPrevented && store.state.chat.fullscreen && !settingsModalOpen.value) {
         e.preventDefault()
         store.dispatch('chat/setFullscreen', false)
+        return
+      }
+
+      // Ctrl+F opens Find (also from the chat or a note: it searches the PDF)
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
+        if (canSearch()) {
+          e.preventDefault()
+          openSearch()
+        }
+        return
+      }
+
+      // F3 / Shift+F3: next / previous match
+      if (e.key === 'F3' && !e.ctrlKey && !e.altKey) {
+        if (canSearch()) {
+          e.preventDefault()
+          findStep(e.shiftKey ? -1 : 1)
+        }
         return
       }
 
@@ -684,6 +749,7 @@ export default {
     }
     
     return {
+      searchOpen,
       pdfViewer,
       pdfDocument,
       sidebarVisible,

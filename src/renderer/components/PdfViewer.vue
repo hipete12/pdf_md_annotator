@@ -42,6 +42,7 @@ import { ref, computed, nextTick, watch, onMounted, onUnmounted, shallowRef } fr
 import { useStore } from 'vuex'
 import { TextLayer } from 'pdfjs-dist'
 import AnnotationBox from './AnnotationBox.vue'
+import { highlightTextDivs, restoreTextDivs } from '../utils/pdfSearch'
 
 const MAX_CANVAS_SIZE = 16384
 const PAGE_GAP = 20
@@ -90,6 +91,10 @@ export default {
     const textLayerTasks = new Map()
     const renderedTextLayers = new Set()
     const baseViewports = new Map()
+    // Find: text layer spans changed by the highlights, per page
+    const highlightedDivs = new Map()
+    // Current match waiting for its page's text layer before scrolling to it
+    let pendingReveal = null
 
     let activeRenders = 0
     let renderGeneration = 0
@@ -308,12 +313,84 @@ export default {
       }
 
       renderedTextLayers.delete(pageNum)
+      highlightedDivs.delete(pageNum)
 
       const container = textLayerRefs.get(pageNum)
       if (container) {
         container.replaceChildren()
       }
     }
+
+    // --- Find (search bar, see store/search.js) ------------------------------
+    // Matches to highlight, per page; the current one is "selected"
+    const matchesByPage = computed(() => {
+      const byPage = new Map()
+      const { open, matches, current } = store.state.search
+      if (!open) return byPage
+      matches.forEach((match, index) => {
+        if (!byPage.has(match.pageId)) byPage.set(match.pageId, [])
+        byPage.get(match.pageId).push({ segments: match.segments, selected: index === current })
+      })
+      return byPage
+    })
+
+    const highlightPage = (pageNum) => {
+      const entry = textLayerEntries.get(pageNum)
+      if (!entry) return
+      const { textDivs, textContentItemsStr } = entry.layer
+      const previous = highlightedDivs.get(pageNum)
+      if (previous) restoreTextDivs(textDivs, textContentItemsStr, previous)
+      const changed = highlightTextDivs(textDivs, textContentItemsStr, matchesByPage.value.get(pageNum) || [])
+      if (changed.length) highlightedDivs.set(pageNum, changed)
+      else highlightedDivs.delete(pageNum)
+    }
+
+    const highlightAllPages = () => {
+      for (const pageNum of textLayerEntries.keys()) highlightPage(pageNum)
+    }
+
+    // Scroll so the element is in view (centered), unless it already is
+    const scrollIntoViewer = (element) => {
+      const container = viewerContainer.value
+      if (!container) return
+      const view = container.getBoundingClientRect()
+      const rect = element.getBoundingClientRect()
+      const margin = 40
+      if (rect.top < view.top + margin || rect.bottom > view.bottom - margin) {
+        container.scrollTop += (rect.top + rect.height / 2) - (view.top + view.height / 2)
+      }
+      if (rect.left < view.left || rect.right > view.right) {
+        container.scrollLeft += (rect.left + rect.width / 2) - (view.left + view.width / 2)
+      }
+    }
+
+    const revealCurrentMatch = () => {
+      const match = store.state.search.open ? store.getters['search/currentMatch'] : null
+      pendingReveal = null
+      if (!match) return
+      const hit = textLayerEntries.has(match.pageId) &&
+        textLayerRefs.get(match.pageId)?.querySelector('.search-hit.selected')
+      if (hit) {
+        scrollIntoViewer(hit)
+        return
+      }
+      // Bring the page into view; its text layer renders and highlightPage
+      // finishes the scroll
+      pendingReveal = match
+      const container = viewerContainer.value
+      const wrapper = container?.querySelector(`[data-page="${match.pageId}"]`)
+      if (wrapper) {
+        container.scrollTop += wrapper.getBoundingClientRect().top - container.getBoundingClientRect().top
+      }
+    }
+
+    watch(
+      () => [matchesByPage.value, store.state.search.revealNonce],
+      ([byPage, nonce], [oldByPage, oldNonce] = []) => {
+        if (byPage !== oldByPage) highlightAllPages()
+        if (nonce !== oldNonce) revealCurrentMatch()
+      }
+    )
 
     const cancelAllTextLayers = () => {
       const pageNums = new Set([
@@ -402,6 +479,8 @@ export default {
 
         renderedTextLayers.add(pageNum)
         textLayerEntries.set(pageNum, { layer, baseViewport })
+        highlightPage(pageNum)
+        if (pendingReveal?.pageId === pageNum) revealCurrentMatch()
       } catch (err) {
         if (!isCancelledError(err)) {
           console.error(`Page ${pageNum} text layer error:`, err)
@@ -686,6 +765,8 @@ export default {
       textLayerTasks.clear()
       renderedTextLayers.clear()
       baseViewports.clear()
+      highlightedDivs.clear()
+      pendingReveal = null
       clearTimeout(textScaleUpdateTimeout)
       textScaleUpdateTimeout = null
       pageMetrics.clear()

@@ -24,6 +24,9 @@ conversation into a Quarto document.
   - Custom macros via `\newcommand`
   - Error display for invalid LaTeX
 - **Code Highlighting**: Syntax highlighting for 20+ programming languages
+- **Find** (`Ctrl+F`): search the PDF's text on every page, with all matches highlighted
+  - `Enter` / `Shift+Enter` (or `F3` / `Shift+F3`) move to the next / previous match, wrapping around
+  - Starts from the text selected on the page; ignores case and line breaks
 - **AI Chat** (`Ctrl+Shift+L`): chat about the open PDF with an LLM
   - OpenRouter, OpenAI, OpenCode Go, local Ollama / LM Studio, or any OpenAI-compatible API
   - The document text is included automatically; select text or click a note to attach it as context
@@ -43,6 +46,7 @@ conversation into a Quarto document.
   - `Ctrl+S`: Save
   - `Ctrl+Shift+S`: Save As (copies the PDF and its annotations to a new name)
   - `Ctrl+O`: Open a PDF or a chat
+  - `Ctrl+F`: Find in the PDF (`F3` / `Shift+F3`: next / previous match)
   - `Ctrl+N`: New chat
   - `Ctrl+\`: Toggle sidebar
   - `Ctrl+Shift+L`: Toggle chat
