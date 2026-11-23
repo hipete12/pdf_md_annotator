@@ -32,6 +32,24 @@
     </div>
 
     <template v-if="message.role === 'user' && !editing">
+      <!-- Images pasted into the message; click to see them larger -->
+      <div
+        v-if="message.attachments && message.attachments.length"
+        class="chat-message-images"
+      >
+        <button
+          v-for="image in message.attachments"
+          :key="image.id"
+          class="chat-message-image"
+          :title="image.width ? `Pasted image, ${image.width} × ${image.height}. Click to enlarge.` : 'Pasted image. Click to enlarge.'"
+          @click="$emit('preview-image', image)"
+        >
+          <img
+            :src="image.dataUrl"
+            alt="Pasted image"
+          >
+        </button>
+      </div>
       <div
         v-if="message.content"
         class="chat-bubble"
@@ -260,7 +278,7 @@ export default {
     siblingCount: { type: Number, default: 1 }
   },
 
-  emits: ['retry', 'regenerate', 'edit', 'submit-edit', 'cancel-edit', 'switch-branch', 'delete-branch', 'open-context'],
+  emits: ['retry', 'regenerate', 'edit', 'submit-edit', 'cancel-edit', 'switch-branch', 'delete-branch', 'open-context', 'preview-image'],
 
   setup(props) {
     const store = useStore()
@@ -511,6 +529,31 @@ export default {
   color: var(--danger-color);
   font-size: 11px;
   cursor: pointer;
+}
+
+.chat-message-images {
+  align-self: flex-end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 85%;
+}
+
+.chat-message-image {
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--sidebar-bg);
+  cursor: zoom-in;
+}
+
+.chat-message-image img {
+  display: block;
+  max-width: 220px;
+  max-height: 160px;
+  object-fit: contain;
 }
 
 .chat-images-note {

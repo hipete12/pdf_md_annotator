@@ -159,26 +159,53 @@ export function completedExchanges(messages) {
  * @param {Array<{dataUrl: string}>} [params.images] - page images for the new message
  * @returns {Array<{role: string, content: string|Array}>}
  */
-export function buildRequestMessages({ systemTemplate, userTemplate, title, documentText, history = [], userMessage, images = [] }) {
+export function buildRequestMessages({ systemTemplate, userTemplate, title, documentText, history = [], userMessage, images = [], includeAttachments = true }) {
   const messages = [{
     role: 'system',
     content: fillTemplate(systemTemplate, { title, document: documentText }).trim()
   }]
 
+  // Images pasted into a message ride along with it in later turns too;
+  // models that cannot see images get the text only
+  const attached = (message) => (includeAttachments ? imageUrlsOf(message.attachments) : [])
+
   for (const message of completedExchanges(history)) {
     messages.push(message.role === 'user'
-      ? { role: 'user', content: buildUserContent(userTemplate, { input: message.content, contexts: message.contexts }) }
+      ? { role: 'user', content: withImages(buildUserContent(userTemplate, { input: message.content, contexts: message.contexts }), attached(message)) }
       : { role: 'assistant', content: message.content })
   }
 
   const text = buildUserContent(userTemplate, { input: userMessage.input, contexts: userMessage.contexts })
   messages.push({
     role: 'user',
-    content: images.length
-      ? [{ type: 'text', text }, ...images.map(img => ({ type: 'image_url', image_url: { url: img.dataUrl } }))]
-      : text
+    // Pasted images first (what the user is asking about), then page images
+    content: withImages(text, [...attached(userMessage), ...images.map(img => img.dataUrl)])
   })
   return messages
+}
+
+function imageUrlsOf(attachments) {
+  return (Array.isArray(attachments) ? attachments : [])
+    .filter(a => a && a.type === 'image' && typeof a.dataUrl === 'string')
+    .map(a => a.dataUrl)
+}
+
+function withImages(text, urls) {
+  return urls.length
+    ? [{ type: 'text', text }, ...urls.map(url => ({ type: 'image_url', image_url: { url } }))]
+    : text
+}
+
+/** Text of a request message (string content, or the text parts of a multi-part one). */
+export function messageText(message) {
+  const content = message?.content
+  if (typeof content === 'string') return content
+  return Array.isArray(content) ? content.filter(p => p.type === 'text').map(p => p.text).join('\n') : ''
+}
+
+/** Number of images in request messages. */
+export function countImages(messages) {
+  return messages.reduce((sum, m) => sum + (Array.isArray(m.content) ? m.content.filter(p => p.type === 'image_url').length : 0), 0)
 }
 
 /**

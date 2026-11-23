@@ -9,7 +9,8 @@
  * (llm:chat-start) and arrive through the plugin created by createChatPlugin.
  */
 import { v4 as uuidv4 } from 'uuid'
-import { buildRequestMessages, estimateTokens, formatDocument, sessionTitleFrom } from '../utils/chatPrompt'
+import { buildRequestMessages, countImages, estimateTokens, formatDocument, messageText, sessionTitleFrom } from '../utils/chatPrompt'
+import { MAX_IMAGES_PER_MESSAGE, sanitizeAttachments } from '../utils/chatImages'
 import { extractDocumentPages } from '../utils/documentText'
 import { renderPageImage as defaultRenderPageImage, selectVisionPages } from '../utils/pageImages'
 import { LLM_PROVIDERS, resolveVisionSupport } from '../../common/llm'
@@ -87,7 +88,13 @@ export function sanitizeSessions(data) {
       ...normalizeTree(
         s.messages
           .filter(m => m && typeof m.id === 'string' && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
-          .map(m => ({ ...m, contexts: Array.isArray(m.contexts) ? m.contexts : [], pending: false })),
+          .map(m => ({
+            ...m,
+            contexts: Array.isArray(m.contexts) ? m.contexts : [],
+            // Images pasted into the message
+            ...(m.attachments ? { attachments: sanitizeAttachments(m.attachments) } : {}),
+            pending: false
+          })),
         s.rootActiveId
       )
     }))
@@ -113,6 +120,8 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       // Phase 4: selection waiting to be attached / contexts for the next message
       pendingContext: null,
       attachedContexts: [],
+      // Images pasted into the message box, sent with the next message
+      attachedImages: [],
       fullscreen: false,
       // e.g. "Reading document…" while building a request
       status: '',
@@ -173,6 +182,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         state.viewer = { open: false, run: false, nonce: 0 }
         state.pendingContext = null
         state.attachedContexts = []
+        state.attachedImages = []
         state.status = ''
         state.notice = ''
         state.lastRequest = null
@@ -312,6 +322,15 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       REMOVE_ATTACHED(state, id) {
         state.attachedContexts = state.attachedContexts.filter(c => c.id !== id)
       },
+      ATTACH_IMAGE(state, image) {
+        state.attachedImages.push(image)
+      },
+      REMOVE_ATTACHED_IMAGE(state, id) {
+        state.attachedImages = state.attachedImages.filter(image => image.id !== id)
+      },
+      CLEAR_ATTACHED_IMAGES(state) {
+        state.attachedImages = []
+      },
       CLEAR_ATTACHED(state) {
         state.attachedContexts = []
       },
@@ -426,19 +445,49 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         return dispatch('persist')
       },
 
+      // A pasted image for the next message (see utils/chatImages.js)
+      attachImage({ commit, state, getters }, image) {
+        if (getters.modelVision === false) {
+          commit('SET_NOTICE', `${getters.sessionModel.model} can't read images. Choose a model that can (marked "vision" in the model picker) to paste images.`)
+          return false
+        }
+        if (state.attachedImages.length >= MAX_IMAGES_PER_MESSAGE) {
+          commit('SET_NOTICE', `Up to ${MAX_IMAGES_PER_MESSAGE} images per message.`)
+          return false
+        }
+        commit('SET_NOTICE', '')
+        commit('ATTACH_IMAGE', image)
+        return true
+      },
+
+      // The model may have changed since the images were pasted
+      canSendImages({ commit, state, getters }) {
+        if (!state.attachedImages.length || getters.modelVision !== false) return true
+        commit('SET_NOTICE', `${getters.sessionModel.model} can't read images. Remove them or choose a model that can.`)
+        return false
+      },
+
+      removeAttachedImage({ commit }, id) {
+        commit('REMOVE_ATTACHED_IMAGE', id)
+      },
+
       async sendMessage({ commit, dispatch, state, getters }, { text }) {
         const input = String(text || '').trim()
-        if (state.streaming || state.generating || (!input && state.attachedContexts.length === 0)) return false
+        const images = state.attachedImages
+        if (state.streaming || state.generating || (!input && state.attachedContexts.length === 0 && images.length === 0)) return false
 
         if (!getters.sessionModel.model) {
           commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
           return false
         }
+        if (!await dispatch('canSendImages')) return false
         commit('SET_NOTICE', '')
 
         const sessionId = getters.activeSession ? getters.activeSession.id : await dispatch('newSession')
         const session = getters.activeSession
-        if (session.messages.length === 0 && !getters.isStandalone) commit('RENAME_SESSION', { id: sessionId, title: sessionTitleFrom(input || 'Selected context') })
+        if (session.messages.length === 0 && !getters.isStandalone) {
+          commit('RENAME_SESSION', { id: sessionId, title: sessionTitleFrom(input || (images.length ? 'Image' : 'Selected context')) })
+        }
 
         // Continue the visible branch
         const path = activePath(getters.activeSession)
@@ -449,10 +498,12 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           activeChildId: null,
           content: input,
           contexts: clone(state.attachedContexts),
+          ...(images.length ? { attachments: clone(images) } : {}),
           created: now()
         }
         commit('ADD_MESSAGE', { sessionId, message: userMessage })
         commit('CLEAR_ATTACHED')
+        commit('CLEAR_ATTACHED_IMAGES')
         commit('SET_PENDING_CONTEXT', null)
         return dispatch('generateReply', { sessionId, userMessageId: userMessage.id })
       },
@@ -506,11 +557,12 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
             title: chatBaseName(state.target.path),
             documentText: '',
             history,
-            userMessage: { input: userMessage.content, contexts: userMessage.contexts }
+            userMessage: { input: userMessage.content, contexts: userMessage.contexts, attachments: userMessage.attachments },
+            includeAttachments: getters.modelVision !== false
           })
           commit('SET_LAST_REQUEST', {
-            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(m.content), 0),
-            images: 0,
+            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(messageText(m)), 0),
+            images: countImages(messages),
             truncated: false,
             includedPages: [],
             totalPages: 0
@@ -561,15 +613,14 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
             title: String(rootState.pdfPath || 'document').split(/[\\/]/).pop(),
             documentText: doc.text,
             history,
-            userMessage: { input: userMessage.content, contexts: userMessage.contexts },
-            images
+            userMessage: { input: userMessage.content, contexts: userMessage.contexts, attachments: userMessage.attachments },
+            images,
+            includeAttachments: getters.modelVision !== false
           })
           commit('SET_LAST_REQUEST', {
             // Text only; image token cost depends on the provider
-            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(
-              typeof m.content === 'string' ? m.content : m.content.filter(p => p.type === 'text').map(p => p.text).join('\n')
-            ), 0),
-            images: images.length,
+            estimatedTokens: messages.reduce((sum, m) => sum + estimateTokens(messageText(m)), 0),
+            images: countImages(messages),
             truncated: doc.truncated,
             includedPages: doc.includedPages,
             totalPages: doc.totalPages
@@ -684,14 +735,15 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       // Edit a user message and regenerate: the edited text becomes a new
       // sibling of the original (a new branch, even when unchanged) with a
       // fresh reply. The original branch is kept and can be switched back to.
-      async editAndRegenerate({ commit, dispatch, state, getters }, { messageId, text, contexts }) {
+      async editAndRegenerate({ commit, dispatch, state, getters }, { messageId, text, contexts, attachments }) {
         const session = getters.activeSession
         if (!session || state.streaming) return false
         const original = session.messages.find(m => m.id === messageId)
         if (!original || original.role !== 'user') return false
         const input = String(text || '').trim()
         const keptContexts = clone(contexts ?? original.contexts ?? [])
-        if (!input && keptContexts.length === 0) return false
+        const keptImages = clone(attachments ?? original.attachments ?? [])
+        if (!input && keptContexts.length === 0 && keptImages.length === 0) return false
         if (!getters.sessionModel.model) {
           commit('SET_NOTICE', 'Choose a provider and model in Settings → AI Chat first.')
           return false
@@ -705,6 +757,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
           activeChildId: null,
           content: input,
           contexts: keptContexts,
+          ...(keptImages.length ? { attachments: keptImages } : {}),
           created: now()
         }
         commit('ADD_MESSAGE', { sessionId: session.id, message: edited })

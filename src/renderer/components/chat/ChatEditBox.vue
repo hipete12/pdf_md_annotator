@@ -3,6 +3,32 @@
     ref="root"
     class="chat-edit"
   >
+    <!-- Pasted images kept with the edited message (× drops one) -->
+    <div
+      v-if="attachments.length"
+      class="chat-edit-images"
+    >
+      <span
+        v-for="image in attachments"
+        :key="image.id"
+        class="chat-edit-image"
+      >
+        <img
+          :src="image.dataUrl"
+          alt="Pasted image"
+        >
+        <button
+          class="chat-edit-image-remove"
+          title="Remove from this message"
+          @click="removeImage(image)"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M5 5l6 6M11 5l-6 6" /></svg>
+        </button>
+      </span>
+    </div>
     <div
       v-if="contexts.length"
       class="chat-edit-contexts"
@@ -77,8 +103,9 @@ export default {
     const input = ref(null)
     const text = ref(props.message.content)
     const contexts = ref(JSON.parse(JSON.stringify(props.message.contexts || [])))
+    const attachments = ref([...(props.message.attachments || [])])
 
-    const canSubmit = computed(() => text.value.trim().length > 0 || contexts.value.length > 0)
+    const canSubmit = computed(() => text.value.trim().length > 0 || contexts.value.length > 0 || attachments.value.length > 0)
 
     const autoGrow = () => {
       const el = input.value
@@ -88,7 +115,12 @@ export default {
     }
 
     const submit = () => {
-      if (canSubmit.value) emit('submit', { text: text.value, contexts: contexts.value })
+      if (canSubmit.value) emit('submit', { text: text.value, contexts: contexts.value, attachments: attachments.value })
+    }
+
+    const removeImage = (image) => {
+      attachments.value = attachments.value.filter(a => a !== image)
+      input.value?.focus()
     }
 
     const removeContext = (context) => {
@@ -144,7 +176,7 @@ export default {
       document.removeEventListener('focusin', onDocumentFocusIn, true)
     })
 
-    return { root, input, text, contexts, canSubmit, autoGrow, submit, removeContext, onKeydown, contextClass, contextKindLabel, contextLocation }
+    return { root, input, text, contexts, attachments, removeImage, canSubmit, autoGrow, submit, removeContext, onKeydown, contextClass, contextKindLabel, contextLocation }
   }
 }
 </script>
@@ -160,6 +192,50 @@ export default {
   border-radius: 10px;
   background: var(--annotation-bg);
   box-shadow: 0 0 0 3px var(--selection-color);
+}
+
+.chat-edit-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-edit-image {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.chat-edit-image img {
+  display: block;
+  max-width: 96px;
+  max-height: 64px;
+  object-fit: contain;
+}
+
+.chat-edit-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fff;
+  cursor: pointer;
+}
+
+.chat-edit-image-remove svg {
+  width: 12px;
+  height: 12px;
+  margin: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
 }
 
 .chat-edit-contexts {
