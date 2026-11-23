@@ -130,6 +130,36 @@ test.describe('Chat in its own window', () => {
     await expect(window.locator('.chat-panel')).toHaveCount(1)
   })
 
+  test('Ctrl+drag anywhere in the window moves it', async () => {
+    await launch()
+    const popup = await popOut()
+    const before = await popoutWindow('return win.getBounds()')
+
+    // Drag from the middle of the conversation with Ctrl held
+    await popup.keyboard.down('Control')
+    expect(await popup.evaluate(() => document.documentElement.classList.contains('ctrl-move'))).toBe(true)
+    await popup.mouse.move(200, 300)
+    await popup.mouse.down()
+    await popup.mouse.move(260, 340)
+    await popup.mouse.up()
+    await popup.keyboard.up('Control')
+    expect(await popup.evaluate(() => document.documentElement.classList.contains('ctrl-move'))).toBe(false)
+    await expect.poll(async () => (await popoutWindow('return win.getBounds()')).x - before.x).toBe(60)
+    const after = await popoutWindow('return win.getBounds()')
+    expect(after.y - before.y).toBe(40)
+    expect([after.width, after.height]).toEqual([before.width, before.height])
+
+    // A Ctrl+press on a button moves the window instead of pressing it
+    const picker = await popup.locator('.model-picker-button').boundingBox()
+    await popup.keyboard.down('Control')
+    await popup.mouse.click(picker.x + picker.width / 2, picker.y + picker.height / 2)
+    await popup.keyboard.up('Control')
+    await expect(popup.locator('.model-picker-menu')).toHaveCount(0)
+    // ...and a plain click still presses it
+    await popup.locator('.model-picker-button').click()
+    await expect(popup.locator('.model-picker-menu')).toBeVisible()
+  })
+
   test('the window reopens where it was left, and on screen', async () => {
     await launch()
     await popOut()

@@ -81,6 +81,53 @@ export default {
     const dock = () => emit('dock')
     const closeWindow = () => child?.close()
 
+    // Ctrl+drag anywhere in the window moves it (the main process follows
+    // the pointer's screen position); holding Ctrl shows the move cursor
+    let moving = false
+    const setRootClass = (name, on) => child?.document.documentElement.classList.toggle(name, on)
+    const stopEvent = (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+    }
+    const onCtrlMouseDown = (event) => {
+      if (!event.ctrlKey || event.button !== 0 || !ipcRenderer) return
+      // Moving, not clicking, selecting or focusing what is under the pointer
+      stopEvent(event)
+      moving = true
+      setRootClass('window-moving', true)
+      ipcRenderer.send('chat-popout:drag-start', { x: event.screenX, y: event.screenY })
+    }
+    const onMoveDrag = (event) => {
+      if (!moving) return
+      stopEvent(event)
+      ipcRenderer.send('chat-popout:drag-move', { x: event.screenX, y: event.screenY })
+    }
+    const onEndDrag = (event) => {
+      if (!moving) return
+      moving = false
+      setRootClass('window-moving', false)
+      ipcRenderer.send('chat-popout:drag-end')
+      if (event?.type !== 'mouseup' || !child) return
+      // The press and release make a click on what is under the pointer: drop it
+      child.addEventListener('click', stopEvent, { capture: true, once: true })
+      setTimeout(() => child?.removeEventListener('click', stopEvent, true), 0)
+    }
+    const onCtrlKey = (event) => {
+      if (event.key === 'Control') setRootClass('ctrl-move', event.type === 'keydown')
+    }
+    const onBlur = (event) => {
+      setRootClass('ctrl-move', false)
+      onEndDrag(event)
+    }
+    const dragListeners = [
+      ['mousedown', onCtrlMouseDown, true],
+      ['mousemove', onMoveDrag, true],
+      ['mouseup', onEndDrag, true],
+      ['keydown', onCtrlKey, true],
+      ['keyup', onCtrlKey, true],
+      ['blur', onBlur, false]
+    ]
+
     onMounted(() => {
       const bounds = store.state.settings.chat.popoutBounds
       const features = [
@@ -124,6 +171,7 @@ export default {
       doc.body.appendChild(root)
       target.value = root
 
+      for (const [type, listener, capture] of dragListeners) child.addEventListener(type, listener, capture)
       child.addEventListener('pagehide', onWindowGone)
       // Safety net in case the window disappears without pagehide
       closedPoll = setInterval(() => { if (child?.closed) onWindowGone() }, 1000)

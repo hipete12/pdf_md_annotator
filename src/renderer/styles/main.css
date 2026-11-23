@@ -412,6 +412,18 @@ body {
   height: 100vh;
 }
 
+/* Holding Ctrl in the popped-out chat: a drag moves the window */
+.ctrl-move,
+.ctrl-move *,
+.window-moving,
+.window-moving * {
+  cursor: move !important;
+}
+
+.window-moving * {
+  user-select: none !important;
+}
+
 /* Text highlights, between the page image and the text layer. Multiply
    keeps the text dark like a marker; on an inverted (dark) page plain
    translucent colour reads better */
