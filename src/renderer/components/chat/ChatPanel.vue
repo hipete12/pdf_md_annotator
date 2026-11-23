@@ -142,7 +142,10 @@
       class="chat-messages"
       @scroll="onScroll"
     >
-      <div class="chat-messages-inner">
+      <div
+        class="chat-messages-inner"
+        :style="zoomStyle"
+      >
         <!-- Empty states -->
         <div
           v-if="!hasModel"
@@ -227,6 +230,7 @@
     <div
       v-if="notice"
       class="chat-notice"
+      :style="zoomStyle"
     >
       <span>{{ notice }}</span>
       <button
@@ -238,7 +242,23 @@
       </button>
     </div>
 
-    <footer class="chat-composer">
+    <!-- Zoom level, shown briefly after Ctrl +/-/0, floating above the composer -->
+    <div class="chat-zoom-anchor">
+      <Transition name="chat-zoom-fade">
+        <div
+          v-if="zoomIndicator"
+          class="chat-zoom-indicator"
+          role="status"
+        >
+          Chat zoom {{ zoomPercent }}%
+        </div>
+      </Transition>
+    </div>
+
+    <footer
+      class="chat-composer"
+      :style="zoomStyle"
+    >
       <!-- Context for the next message: pending selection (dashed) and attached chips -->
       <div
         v-if="pendingContext || attachedContexts.length"
@@ -426,6 +446,7 @@ import ChatDocEvent from './ChatDocEvent.vue'
 import { listCommands, parseCommand } from '../../../common/docGen'
 import { describePageRanges } from '../../utils/chatPrompt'
 import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
+import { applyChatZoomAction, normalizeChatZoom } from '../../utils/chatZoom'
 
 const MIN_WIDTH = 300
 const DEFAULT_WIDTH = 420
@@ -837,6 +858,37 @@ export default {
     )
     watch(activeSessionId, scrollToBottom)
 
+    // --- Zoom --------------------------------------------------------------
+    // Ctrl +/-/0 while the chat has focus (App.vue sends 'chat:zoom') scales
+    // the messages and the composer; the header keeps its size.
+    const zoom = computed(() => normalizeChatZoom(store.state.settings.chat.zoom))
+    const zoomPercent = computed(() => Math.round(zoom.value * 100))
+    const zoomStyle = computed(() => (zoom.value === 1 ? null : { zoom: zoom.value }))
+    const zoomIndicator = ref(false)
+    let zoomIndicatorTimer = null
+
+    const onZoom = (event) => {
+      const next = applyChatZoomAction(zoom.value, event.detail)
+      if (next !== store.state.settings.chat.zoom) {
+        store.commit('SET_SETTING', { path: 'chat.zoom', value: next })
+        store.dispatch('saveSettings')
+      }
+      // Shown even at the limit, so the key press gets feedback
+      zoomIndicator.value = true
+      clearTimeout(zoomIndicatorTimer)
+      zoomIndicatorTimer = setTimeout(() => { zoomIndicator.value = false }, 1200)
+    }
+    window.addEventListener('chat:zoom', onZoom)
+
+    // Keep the newest message in view as the text grows or shrinks
+    watch(zoom, () => { if (stickToBottom.value) scrollToBottom() })
+    // The message box is sized while typing; size it again when its width
+    // changes (zoom, full screen)
+    watch([zoom, fullscreen], async () => {
+      await nextTick()
+      autoGrow()
+    })
+
     // --- Full screen -------------------------------------------------------
     const toggleFullscreen = () => store.dispatch('chat/setFullscreen', !fullscreen.value)
 
@@ -887,6 +939,8 @@ export default {
       document.removeEventListener('selectionchange', onSelectionChange)
       window.removeEventListener('chat:attach-selection', attachSelectionNow)
       window.removeEventListener('chat:report-selection', onReportSelection)
+      window.removeEventListener('chat:zoom', onZoom)
+      clearTimeout(zoomIndicatorTimer)
       clearTimeout(selectionTimer)
       window.removeEventListener('resize', onWindowResize)
       if (resizing.value) stopResize()
@@ -921,6 +975,9 @@ export default {
     scrollToBottom()
 
     return {
+      zoomStyle,
+      zoomPercent,
+      zoomIndicator,
       chatName,
       chatPath,
       commandSuggestions,
@@ -1016,6 +1073,8 @@ export default {
   inset: var(--titlebar-height) 0 0 0;
   z-index: 500;
   width: auto;
+  /* Size from the insets; height: 100% would push the bottom past the window */
+  height: auto;
   border-left: none;
 }
 
@@ -1210,6 +1269,41 @@ export default {
   gap: 16px;
 }
 
+/* Zero-height row above the composer: the zoom indicator floats over the
+   last messages without moving them */
+.chat-zoom-anchor {
+  position: relative;
+  flex: none;
+  height: 0;
+  /* Above the messages, below the composer's menus */
+  z-index: 4;
+  pointer-events: none;
+}
+
+.chat-zoom-indicator {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--annotation-bg);
+  box-shadow: var(--shadow-md);
+  color: var(--text-color);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-zoom-fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+
+.chat-zoom-fade-leave-to {
+  opacity: 0;
+}
+
 .chat-empty {
   display: flex;
   flex-direction: column;
@@ -1402,6 +1496,11 @@ export default {
 
 /* Composer */
 .chat-composer {
+  /* Container for the narrow-composer rules below; it also makes the
+     composer a stacking context, so it sits above the messages */
+  container-type: inline-size;
+  position: relative;
+  z-index: 5;
   flex: none;
   padding: 8px 12px 10px;
   border-top: 1px solid var(--border-color);
@@ -1428,6 +1527,7 @@ export default {
 
 .chat-input {
   flex: 1;
+  min-width: 0;
   min-height: 24px;
   max-height: 200px;
   padding: 3px 0;
@@ -1439,6 +1539,13 @@ export default {
   font: inherit;
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* One line, cut with an ellipsis, so a narrow composer shows no scrollbar */
+.chat-input::placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat-vision-toggle {
@@ -1511,7 +1618,8 @@ export default {
 }
 
 .chat-model,
-.chat-status {
+.chat-status,
+.chat-tokens {
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
@@ -1532,6 +1640,14 @@ export default {
 
 .chat-hint {
   margin-left: auto;
+}
+
+/* Narrow (or zoomed-in) composer: drop the hint so the model and the token
+   count keep their room */
+@container (max-width: 360px) {
+  .chat-hint {
+    display: none;
+  }
 }
 </style>
 

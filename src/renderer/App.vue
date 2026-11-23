@@ -206,6 +206,22 @@ export default {
     const zoomReset = () => {
       store.commit('SET_SCALE', 1.0)
     }
+
+    // Zoom keys (Ctrl +/-/0) and the View menu zoom the chat while it has
+    // focus (e.g. while typing a message) and the PDF otherwise. A standalone
+    // chat has no PDF, so there they always zoom the chat. The toolbar
+    // buttons always zoom the PDF.
+    const zoomTargetsChat = (el) => mode.value === 'chat' || Boolean(el?.closest?.('.chat-panel'))
+
+    const zoomShortcut = (action, el = document.activeElement) => {
+      if (zoomTargetsChat(el)) {
+        window.dispatchEvent(new CustomEvent('chat:zoom', { detail: action }))
+        return
+      }
+      if (action === 'in') zoomIn()
+      else if (action === 'out') zoomOut()
+      else zoomReset()
+    }
     
     const openSettings = () => {
       store.commit('SET_SETTINGS_MODAL', true)
@@ -347,9 +363,9 @@ export default {
       toggleSidebar()
     }
     
-    const handleZoomIn = () => zoomIn()
-    const handleZoomOut = () => zoomOut()
-    const handleZoomReset = () => zoomReset()
+    const handleZoomIn = () => zoomShortcut('in')
+    const handleZoomOut = () => zoomShortcut('out')
+    const handleZoomReset = () => zoomShortcut('reset')
     const handleOpenSettings = () => openSettings()
     const handleToggleChat = () => {
       if (pdfDocument.value) toggleChat()
@@ -563,22 +579,22 @@ export default {
         store.dispatch('redo')
       }
       
-      // Ctrl++ to zoom in (both = and + keys)
+      // Ctrl++ to zoom in (both = and + keys); the chat while it has focus
       if (e.ctrlKey && (e.key === '+' || e.key === '=')) {
         e.preventDefault()
-        zoomIn()
+        zoomShortcut('in', e.target)
       }
-      
+
       // Ctrl+- to zoom out
       if (e.ctrlKey && e.key === '-') {
         e.preventDefault()
-        zoomOut()
+        zoomShortcut('out', e.target)
       }
-      
+
       // Ctrl+0 to reset zoom
       if (e.ctrlKey && e.key === '0') {
         e.preventDefault()
-        zoomReset()
+        zoomShortcut('reset', e.target)
       }
     }
     

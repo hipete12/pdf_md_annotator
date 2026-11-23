@@ -28,6 +28,7 @@ conversation into a Quarto document.
   - OpenRouter, OpenAI, OpenCode Go, local Ollama / LM Studio, or any OpenAI-compatible API
   - The document text is included automatically; select text or click a note to attach it as context
   - Multiple sessions per document, resizable panel, full-screen mode
+  - Its own text zoom: `Ctrl +` / `Ctrl -` / `Ctrl+0` zoom the chat instead of the PDF while you type in it
   - Thinking effort for models that support it (shown as `model:effort`, e.g. `glm-5.3:max`)
   - Optional page images for vision-capable models
   - Optional web search and page reading through Tavily
@@ -46,6 +47,7 @@ conversation into a Quarto document.
   - `Ctrl+\`: Toggle sidebar
   - `Ctrl+Shift+L`: Toggle chat
   - `Ctrl+L`: Add the current selection (PDF text, note or chat reply) to the chat
+  - `Ctrl +` / `Ctrl -` / `Ctrl+0`: Zoom in / out / reset; while the chat has focus (e.g. you are typing a message) they zoom the chat text instead of the PDF
 - **Hide/Collapse Annotations**:
   - Press `Ctrl+H` to hide an annotation with a title
   - Shows as a small icon with title when collapsed
