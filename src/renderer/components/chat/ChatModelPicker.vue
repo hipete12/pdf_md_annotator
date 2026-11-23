@@ -414,7 +414,7 @@ export default {
   display: flex;
   align-items: center;
   gap: 3px;
-  max-width: 220px;
+  max-width: min(220px, 100%);
   padding: 1px 4px;
   border: 1px solid transparent;
   border-radius: 4px;
@@ -459,7 +459,8 @@ export default {
   position: absolute;
   bottom: calc(100% + 6px);
   left: 0;
-  width: min(340px, 80vw);
+  /* Never wider than the composer (100cqw) when the chat is narrow or zoomed */
+  width: min(340px, 80vw, calc(100cqw - 24px));
   max-height: 380px;
   display: flex;
   flex-direction: column;

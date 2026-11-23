@@ -97,6 +97,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     docPaneRatio: 0.5,
     panelVisible: false,
     panelWidth: 420,
+    // Text zoom of the chat (Ctrl +/- while the chat has focus); 1 = 100%
+    zoom: 1,
     // Attach rendered page images for vision-capable models
     visionEnabled: false,
     // 'context': pages of attached context (or the current page); 'all'
