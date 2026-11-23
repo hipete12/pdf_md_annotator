@@ -401,6 +401,9 @@ export default {
       toggleSidebar()
     }
     
+    const handleHighlightSelection = () => {
+      if (canSearch()) window.dispatchEvent(new Event('pdf:toggle-highlight'))
+    }
     const handleFind = () => openSearch()
     const handleFindNext = () => findStep(1)
     const handleFindPrevious = () => findStep(-1)
@@ -438,6 +441,7 @@ export default {
         ipcRenderer.on('save-file', handleSaveFile)
         ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.on('highlight-selection', handleHighlightSelection)
         ipcRenderer.on('find', handleFind)
         ipcRenderer.on('find-next', handleFindNext)
         ipcRenderer.on('find-previous', handleFindPrevious)
@@ -465,6 +469,7 @@ export default {
         ipcRenderer.removeListener('save-file', handleSaveFile)
         ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.removeListener('highlight-selection', handleHighlightSelection)
         ipcRenderer.removeListener('find', handleFind)
         ipcRenderer.removeListener('find-next', handleFindNext)
         ipcRenderer.removeListener('find-previous', handleFindPrevious)
@@ -592,6 +597,15 @@ export default {
         if (canSearch()) {
           e.preventDefault()
           openSearch()
+        }
+        return
+      }
+
+      // Ctrl+Shift+H: highlight the selected PDF text (or remove its highlights)
+      if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'h') {
+        if (canSearch()) {
+          e.preventDefault()
+          window.dispatchEvent(new Event('pdf:toggle-highlight'))
         }
         return
       }

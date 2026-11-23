@@ -219,6 +219,12 @@ function createMenu() {
         { role: 'selectAll' },
         { type: 'separator' },
         {
+          label: 'Highlight Selection',
+          accelerator: 'CmdOrCtrl+Shift+H',
+          click: () => mainWindow?.webContents.send('highlight-selection')
+        },
+        { type: 'separator' },
+        {
           label: 'Find...',
           accelerator: 'CmdOrCtrl+F',
           click: () => mainWindow?.webContents.send('find')

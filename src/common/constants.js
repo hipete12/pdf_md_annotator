@@ -48,7 +48,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
     sidebarVisible: true,
     theme: 'light',
     // Dark theme only: also invert the colours of rendered PDF pages
-    invertPdf: false
+    invertPdf: false,
+    // Colour of new text highlights (the last one picked)
+    highlightColor: '#facc15'
   },
   // LLM connection. API keys are NOT settings: they are stored encrypted by
   // the main process (see src/main/secrets.js).

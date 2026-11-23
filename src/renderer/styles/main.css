@@ -399,6 +399,27 @@ body {
   background: transparent;
 }
 
+/* Text highlights, between the page image and the text layer. Multiply
+   keeps the text dark like a marker; on an inverted (dark) page plain
+   translucent colour reads better */
+.highlight-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.pdf-highlight {
+  position: absolute;
+  border-radius: 2px;
+  opacity: 0.5;
+  mix-blend-mode: multiply;
+}
+
+.invert-pdf .pdf-highlight {
+  opacity: 0.38;
+  mix-blend-mode: normal;
+}
+
 /* Find: matches inside text layer spans (inline, unlike the spans
    themselves), the current one stronger */
 .pdf-page-wrapper .textLayer span.search-hit {
