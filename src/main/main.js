@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, Menu, nativeTheme, screen, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const Store = require('electron-store')
@@ -32,6 +32,9 @@ const secrets = createSecrets(store)
 const LLM_USER_AGENT = `PDF-Annotator/${app.getVersion()}`
 
 let mainWindow = null
+// The chat popped out of the main window (see ChatPopout.vue), if open
+let chatPopoutWindow = null
+let currentTheme = 'light'
 let currentPdfPath = null
 
 const isDev = process.env.NODE_ENV === 'development'
@@ -48,7 +51,42 @@ function applyTheme(theme) {
   // Native UI Electron draws (context menus, dialogs on Windows, the macOS
   // title bar) follows the app theme instead of the system one
   nativeTheme.themeSource = name
+  currentTheme = name
   mainWindow?.setBackgroundColor(THEME_BACKGROUNDS[name])
+  chatPopoutWindow?.setBackgroundColor(THEME_BACKGROUNDS[name])
+}
+
+// A window whose saved position is on a monitor that is gone (or mostly
+// off screen) is centered instead
+function keepOnScreen(win) {
+  const bounds = win.getBounds()
+  const visible = screen.getAllDisplays().some(({ workArea: area }) =>
+    bounds.x < area.x + area.width - 80 && bounds.x + bounds.width > area.x + 80 &&
+    bounds.y >= area.y - 20 && bounds.y < area.y + area.height - 80)
+  if (!visible) win.center()
+}
+
+// The chat's own window: opened by the renderer with
+// window.open('', 'chat-popout'), which keeps it in the same renderer, so
+// the chat stays one live conversation (ChatPopout.vue draws into it)
+function setUpChatPopout(win) {
+  chatPopoutWindow = win
+  win.removeMenu()
+  keepOnScreen(win)
+  let timer = null
+  const reportBounds = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      if (win.isDestroyed() || win.isMinimized()) return
+      mainWindow?.webContents.send('chat-popout:bounds', win.getNormalBounds())
+    }, 400)
+  }
+  win.on('move', reportBounds)
+  win.on('resize', reportBounds)
+  win.on('closed', () => {
+    clearTimeout(timer)
+    if (chatPopoutWindow === win) chatPopoutWindow = null
+  })
 }
 
 function setWindowTitle(title) {
@@ -132,6 +170,7 @@ function createWindow() {
 
   mainWindow.on('closed', () => {
     mainWindow = null
+    if (chatPopoutWindow && !chatPopoutWindow.isDestroyed()) chatPopoutWindow.destroy()
   })
 
   // The in-app title bar swaps its maximize/restore button
@@ -142,9 +181,28 @@ function createWindow() {
   // them inside the app (the renderer has Node integration): hand safe URLs
   // to the system browser and block everything else, including navigating
   // the main window away from the app.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  mainWindow.webContents.setWindowOpenHandler(({ url, frameName }) => {
+    if (frameName === 'chat-popout' && (url === 'about:blank' || url === '')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          title: 'Chat',
+          // Same in-app title bar treatment as the main window (the chat
+          // header has the window buttons)
+          frame: !customTitleBar,
+          minWidth: 340,
+          minHeight: 420,
+          backgroundColor: THEME_BACKGROUNDS[currentTheme],
+          autoHideMenuBar: true,
+          icon: path.join(__dirname, '../../static/icons/icon.png')
+        }
+      }
+    }
     openExternalIfSafe(url)
     return { action: 'deny' }
+  })
+  mainWindow.webContents.on('did-create-window', (win, { frameName }) => {
+    if (frameName === 'chat-popout') setUpChatPopout(win)
   })
   // The rendered document is shown in a sandboxed iframe: links in it must
   // not navigate that frame to web pages; open them in the browser instead
@@ -955,6 +1013,24 @@ ipcMain.on('window:toggle-maximize', () => {
 })
 
 ipcMain.on('window:close', () => mainWindow?.close())
+
+// Window buttons of the popped-out chat (drawn in its header)
+ipcMain.on('chat-popout:minimize', () => chatPopoutWindow?.minimize())
+ipcMain.on('chat-popout:toggle-maximize', () => {
+  if (!chatPopoutWindow) return
+  if (chatPopoutWindow.isMaximized()) chatPopoutWindow.unmaximize()
+  else chatPopoutWindow.maximize()
+})
+ipcMain.on('chat-popout:focus', () => {
+  if (!chatPopoutWindow) return
+  if (chatPopoutWindow.isMinimized()) chatPopoutWindow.restore()
+  chatPopoutWindow.focus()
+})
+ipcMain.on('window:focus', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.focus()
+})
 
 ipcMain.handle('menu:get', () => serializeMenu(Menu.getApplicationMenu()?.items))
 

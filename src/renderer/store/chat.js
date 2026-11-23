@@ -122,6 +122,8 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       attachedContexts: [],
       // Images pasted into the message box, sent with the next message
       attachedImages: [],
+      // The chat of the PDF is in its own window (ChatPopout.vue)
+      popout: false,
       fullscreen: false,
       // e.g. "Reading document…" while building a request
       status: '',
@@ -183,6 +185,7 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         state.pendingContext = null
         state.attachedContexts = []
         state.attachedImages = []
+        state.popout = false
         state.status = ''
         state.notice = ''
         state.lastRequest = null
@@ -322,6 +325,9 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
       REMOVE_ATTACHED(state, id) {
         state.attachedContexts = state.attachedContexts.filter(c => c.id !== id)
       },
+      SET_POPOUT(state, value) {
+        state.popout = Boolean(value)
+      },
       ATTACH_IMAGE(state, image) {
         state.attachedImages.push(image)
       },
@@ -458,6 +464,12 @@ export function createChatModule({ ipcRenderer, renderPageImage = defaultRenderP
         commit('SET_NOTICE', '')
         commit('ATTACH_IMAGE', image)
         return true
+      },
+
+      // Move the chat into its own window (true) or back into the main one
+      setPopout({ commit, dispatch }, value) {
+        if (value) dispatch('setFullscreen', false)
+        commit('SET_POPOUT', value)
       },
 
       // The model may have changed since the images were pasted

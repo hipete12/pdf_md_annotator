@@ -399,6 +399,19 @@ body {
   background: transparent;
 }
 
+/* The popped-out chat window (ChatPopout.vue) */
+.chat-popout-body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--bg-color);
+}
+
+.chat-popout-root {
+  display: flex;
+  height: 100vh;
+}
+
 /* Text highlights, between the page image and the text layer. Multiply
    keeps the text dark like a marker; on an inverted (dark) page plain
    translucent colour reads better */

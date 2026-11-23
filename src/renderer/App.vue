@@ -81,8 +81,16 @@
     
       <!-- Chat (right side, resizable; can go full screen) -->
       <ChatPanel
-        v-if="pdfDocument && chatVisible"
+        v-if="pdfDocument && chatVisible && !chatPopout"
         @close="toggleChat"
+        @open-settings="openSettings"
+      />
+      <!-- ...or popped out into its own window -->
+      <ChatPopout
+        v-if="pdfDocument && chatVisible && chatPopout"
+        :title="popoutTitle"
+        @dock="dockChat"
+        @window="onPopoutWindow"
         @open-settings="openSettings"
       />
     
@@ -108,6 +116,7 @@ import ChatPanel from './components/chat/ChatPanel.vue'
 import DocumentViewer from './components/DocumentViewer.vue'
 import TitleBar from './components/TitleBar.vue'
 import PdfSearchBar from './components/PdfSearchBar.vue'
+import ChatPopout from './components/chat/ChatPopout.vue'
 import { usesCustomTitleBar } from '../common/menuModel'
 
 // Safely get ipcRenderer
@@ -148,7 +157,8 @@ export default {
     ChatPanel,
     DocumentViewer,
     TitleBar,
-    PdfSearchBar
+    PdfSearchBar,
+    ChatPopout
   },
   
   setup() {
@@ -174,6 +184,8 @@ export default {
     const chatVisible = computed(() => Boolean(store.state.settings.chat?.panelVisible))
     const customTitleBar = Boolean(ipcRenderer) && usesCustomTitleBar(process.platform)
     const searchOpen = computed(() => store.state.search.open)
+    const chatPopout = computed(() => store.state.chat.popout)
+    const popoutTitle = computed(() => `Chat - ${String(store.state.pdfPath || '').split(/[\\/]/).pop()}`)
 
     // Theme classes go on <html> so everything inherits them, including the
     // body background, native form controls and scrollbars (color-scheme)
@@ -185,7 +197,11 @@ export default {
       root.classList.toggle('custom-titlebar', customTitleBar)
     })
     // A new document closes Find; reordered, deleted or added pages search again
-    watch(pdfDocument, () => store.dispatch('search/close'))
+    watch(pdfDocument, (doc) => {
+      store.dispatch('search/close')
+      // Leaving the PDF closes the chat's own window (another PDF keeps it)
+      if (!doc) store.dispatch('chat/setPopout', false)
+    })
     watch(() => store.getters.visiblePages, () => {
       if (searchOpen.value) store.dispatch('search/run')
     })
@@ -203,7 +219,25 @@ export default {
     const toggleChat = () => {
       const visible = !chatVisible.value
       store.commit('SET_SETTING', { path: 'chat.panelVisible', value: visible })
-      if (!visible) store.dispatch('chat/setFullscreen', false)
+      if (!visible) {
+        store.dispatch('chat/setFullscreen', false)
+        store.dispatch('chat/setPopout', false)
+      }
+      store.dispatch('saveSettings')
+    }
+
+    // The popped-out chat window: back into the main window, and the app's
+    // shortcuts (zoom, save, find...) work there too
+    const dockChat = () => store.dispatch('chat/setPopout', false)
+    let popoutWindow = null
+    const onPopoutWindow = (win) => {
+      popoutWindow?.removeEventListener('keydown', handleGlobalKeydown)
+      popoutWindow = win
+      win?.addEventListener('keydown', handleGlobalKeydown)
+    }
+    const handlePopoutBounds = (event, bounds) => {
+      if (!bounds) return
+      store.commit('SET_SETTING', { path: 'chat.popoutBounds', value: bounds })
       store.dispatch('saveSettings')
     }
     
@@ -441,6 +475,7 @@ export default {
         ipcRenderer.on('save-file', handleSaveFile)
         ipcRenderer.on('save-file-as', handleSaveFileAs)
         ipcRenderer.on('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.on('chat-popout:bounds', handlePopoutBounds)
         ipcRenderer.on('highlight-selection', handleHighlightSelection)
         ipcRenderer.on('find', handleFind)
         ipcRenderer.on('find-next', handleFindNext)
@@ -469,6 +504,7 @@ export default {
         ipcRenderer.removeListener('save-file', handleSaveFile)
         ipcRenderer.removeListener('save-file-as', handleSaveFileAs)
         ipcRenderer.removeListener('toggle-sidebar', handleToggleSidebar)
+        ipcRenderer.removeListener('chat-popout:bounds', handlePopoutBounds)
         ipcRenderer.removeListener('highlight-selection', handleHighlightSelection)
         ipcRenderer.removeListener('find', handleFind)
         ipcRenderer.removeListener('find-next', handleFindNext)
@@ -596,6 +632,8 @@ export default {
       if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') {
         if (canSearch()) {
           e.preventDefault()
+          // Pressed in the popped-out chat: the PDF is in the main window
+          if (e.view && e.view !== window) ipcRenderer?.send('window:focus')
           openSearch()
         }
         return
@@ -763,6 +801,10 @@ export default {
     }
     
     return {
+      chatPopout,
+      popoutTitle,
+      dockChat,
+      onPopoutWindow,
       searchOpen,
       pdfViewer,
       pdfDocument,

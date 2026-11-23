@@ -101,6 +101,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     panelWidth: 420,
     // Text zoom of the chat (Ctrl +/- while the chat has focus); 1 = 100%
     zoom: 1,
+    // Where the popped-out chat window was last ({ x, y, width, height })
+    popoutBounds: null,
     // Attach rendered page images for vision-capable models
     visionEnabled: false,
     // 'context': pages of attached context (or the current page); 'all'
