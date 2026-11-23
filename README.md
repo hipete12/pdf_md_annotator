@@ -38,6 +38,7 @@ conversation into a Quarto document.
   - Its own text zoom: `Ctrl +` / `Ctrl -` / `Ctrl+0` zoom the chat instead of the PDF while you type in it
   - Thinking effort for models that support it (shown as `model:effort`, e.g. `glm-5.3:max`)
   - Optional page images for vision-capable models
+  - Paste screenshots or copied pictures into the message box (`Ctrl+V`) to ask about them (vision models; large images are scaled to 2048px and saved with the chat)
   - Optional web search and page reading through Tavily
 - **Standalone chats** (`Ctrl+N`): a full-window chat without a PDF, saved as `untitled1.chat`, …
   - `/generate [instructions]` writes a Quarto study document from the conversation

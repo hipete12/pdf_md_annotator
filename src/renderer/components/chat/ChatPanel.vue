@@ -202,19 +202,20 @@
         >
           <ChatMessage
             :message="message"
-          :is-last="index === messages.length - 1"
-          :editing="editingId === message.id"
-          :locked="isStreaming"
-          :sibling-index="branchInfo(message).index"
-          :sibling-count="branchInfo(message).count"
-          @retry="retry"
-          @regenerate="startEdit(message.parentId)"
-          @edit="startEdit(message.id)"
-          @submit-edit="submitEdit(message.id, $event)"
-          @cancel-edit="cancelEdit"
-          @switch-branch="switchBranch(message.id, $event)"
-          @delete-branch="deleteBranch(message.id)"
-          @open-context="openContext"
+            :is-last="index === messages.length - 1"
+            :editing="editingId === message.id"
+            :locked="isStreaming"
+            :sibling-index="branchInfo(message).index"
+            :sibling-count="branchInfo(message).count"
+            @retry="retry"
+            @regenerate="startEdit(message.parentId)"
+            @edit="startEdit(message.id)"
+            @submit-edit="submitEdit(message.id, $event)"
+            @cancel-edit="cancelEdit"
+            @switch-branch="switchBranch(message.id, $event)"
+            @delete-branch="deleteBranch(message.id)"
+            @open-context="openContext"
+            @preview-image="previewImage = $event"
           />
           <ChatDocEvent
             v-for="event in docEventsAfter(message.id)"
@@ -335,6 +336,35 @@
           <span>{{ command.description }}</span>
         </li>
       </ul>
+      <!-- Images pasted into the message box (Ctrl+V), sent with the message -->
+      <div
+        v-if="attachedImages.length"
+        class="chat-image-tray"
+      >
+        <span
+          v-for="image in attachedImages"
+          :key="image.id"
+          class="chat-image-thumb"
+        >
+          <img
+            :src="image.dataUrl"
+            alt="Pasted image"
+            :title="`${image.width} × ${image.height}. Click to enlarge.`"
+            @click="previewImage = image"
+          >
+          <button
+            class="chat-image-remove"
+            title="Remove image"
+            aria-label="Remove image"
+            @click="removeImage(image.id)"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M5 5l6 6M11 5l-6 6" /></svg>
+          </button>
+        </span>
+      </div>
       <div
         class="chat-input-wrap"
         :class="{ disabled: !hasModel }"
@@ -348,6 +378,7 @@
           :disabled="!hasModel"
           @input="autoGrow"
           @keydown="onComposerKeydown"
+          @paste="onComposerPaste"
         />
         <button
           v-if="hasModel && modelTools !== false"
@@ -432,6 +463,23 @@
         <span class="chat-hint">Shift+Enter for a new line</span>
       </div>
     </footer>
+
+    <!-- A pasted image at full size (click or Esc to close) -->
+    <div
+      v-if="previewImage"
+      ref="previewEl"
+      class="chat-image-preview"
+      role="dialog"
+      aria-label="Image"
+      tabindex="-1"
+      @click="previewImage = null"
+      @keydown.esc.stop.prevent="previewImage = null"
+    >
+      <img
+        :src="previewImage.dataUrl"
+        alt="Pasted image"
+      >
+    </div>
   </aside>
 </template>
 
@@ -447,6 +495,7 @@ import { listCommands, parseCommand } from '../../../common/docGen'
 import { describePageRanges } from '../../utils/chatPrompt'
 import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
 import { applyChatZoomAction, normalizeChatZoom } from '../../utils/chatZoom'
+import { imageFilesFrom, prepareImage } from '../../utils/chatImages'
 
 const MIN_WIDTH = 300
 const DEFAULT_WIDTH = 420
@@ -630,7 +679,40 @@ export default {
     const toggleWeb = () => store.dispatch('chat/setSessionWeb', !webEnabled.value)
 
     const canSend = computed(() => hasModel.value && !isStreaming.value &&
-      (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0))
+      (draft.value.trim().length > 0 || chat.value.attachedContexts.length > 0 || chat.value.attachedImages.length > 0))
+
+    // --- Pasted images -------------------------------------------------------
+    const attachedImages = computed(() => chat.value.attachedImages)
+    const previewImage = ref(null)
+    const previewEl = ref(null)
+
+    // Ctrl+V of a screenshot or copied picture attaches it to the next
+    // message; text pastes as usual
+    const onComposerPaste = async (event) => {
+      const files = imageFilesFrom(event.clipboardData)
+      if (!files.length) return
+      // Copied web content can carry text along with the picture: keep both
+      if (!event.clipboardData.getData('text/plain')) event.preventDefault()
+      for (const file of files) {
+        try {
+          if (!await store.dispatch('chat/attachImage', await prepareImage(file))) break
+        } catch (err) {
+          store.commit('chat/SET_NOTICE', `Could not read the pasted image: ${err.message}`)
+        }
+      }
+    }
+
+    const removeImage = (id) => {
+      store.dispatch('chat/removeAttachedImage', id)
+      input.value?.focus()
+    }
+
+    // Esc closes the image preview
+    watch(previewImage, async (image) => {
+      if (!image) return
+      await nextTick()
+      previewEl.value?.focus()
+    })
 
     const suggestions = props.standalone
       ? [
@@ -696,7 +778,9 @@ export default {
         return
       }
       if (!hasModel.value || isStreaming.value) return
-      if (!content.trim() && chat.value.attachedContexts.length === 0) return
+      if (!content.trim() && chat.value.attachedContexts.length === 0 && chat.value.attachedImages.length === 0) return
+      // Checked before the draft is cleared, so the text is kept
+      if (!await store.dispatch('chat/canSendImages')) return
       if (text === undefined) {
         draft.value = ''
         await nextTick()
@@ -756,10 +840,10 @@ export default {
       editingId.value = messageId
     }
     const cancelEdit = () => { editingId.value = null }
-    const submitEdit = async (messageId, { text, contexts }) => {
+    const submitEdit = async (messageId, { text, contexts, attachments }) => {
       editingId.value = null
       stickToBottom.value = true
-      await store.dispatch('chat/editAndRegenerate', { messageId, text, contexts })
+      await store.dispatch('chat/editAndRegenerate', { messageId, text, contexts, attachments })
     }
 
     // Alternatives at each message's fork: { index (1-based), count }
@@ -975,6 +1059,11 @@ export default {
     scrollToBottom()
 
     return {
+      attachedImages,
+      previewImage,
+      previewEl,
+      onComposerPaste,
+      removeImage,
       zoomStyle,
       zoomPercent,
       zoomIndicator,
@@ -1505,6 +1594,75 @@ export default {
   padding: 8px 12px 10px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-color);
+}
+
+.chat-image-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.chat-image-thumb {
+  position: relative;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--sidebar-bg);
+}
+
+.chat-image-thumb img {
+  display: block;
+  height: 56px;
+  max-width: 120px;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+
+.chat-image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.7);
+  color: #fff;
+  cursor: pointer;
+}
+
+.chat-image-remove svg {
+  width: 12px;
+  height: 12px;
+  margin: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}
+
+/* Covers the chat panel (not zoomed with the chat text) */
+.chat-image-preview {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(15, 23, 42, 0.85);
+  cursor: zoom-out;
+  outline: none;
+}
+
+.chat-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: var(--shadow-lg);
 }
 
 .chat-input-wrap {
