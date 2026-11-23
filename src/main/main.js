@@ -216,7 +216,23 @@ function createMenu() {
         { role: 'paste' },
         { role: 'delete' },
         { type: 'separator' },
-        { role: 'selectAll' }
+        { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find...',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => mainWindow?.webContents.send('find')
+        },
+        {
+          label: 'Find Next',
+          accelerator: 'F3',
+          click: () => mainWindow?.webContents.send('find-next')
+        },
+        {
+          label: 'Find Previous',
+          accelerator: 'Shift+F3',
+          click: () => mainWindow?.webContents.send('find-previous')
+        }
       ]
     },
     {

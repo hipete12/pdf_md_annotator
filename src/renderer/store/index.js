@@ -6,6 +6,7 @@ import {
   DEFAULT_STANDALONE_SYSTEM_TEMPLATE, DEFAULT_SYSTEM_TEMPLATE, PREVIOUS_STANDALONE_SYSTEM_TEMPLATES, PREVIOUS_SYSTEM_TEMPLATES
 } from '../../common/llm'
 import { createChatModule, createChatPlugin } from './chat'
+import { createSearchModule } from './search'
 
 // Safely get ipcRenderer - may not be available in browser context
 let defaultIpcRenderer = null
@@ -83,7 +84,8 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
 
   return createStore({
     modules: {
-      chat: createChatModule({ ipcRenderer, ...(renderPageImage ? { renderPageImage } : {}) })
+      chat: createChatModule({ ipcRenderer, ...(renderPageImage ? { renderPageImage } : {}) }),
+      search: createSearchModule()
     },
     
     plugins: [createChatPlugin({ ipcRenderer })],
