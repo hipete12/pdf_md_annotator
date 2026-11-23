@@ -223,6 +223,8 @@ export default {
   setup() {
     const store = useStore()
     const root = ref(null)
+    // Document the outside-click listener is on while the menu is open
+    let listenDoc = null
     const search = ref(null)
     const list = ref(null)
     const effortList = ref(null)
@@ -300,7 +302,9 @@ export default {
       query.value = ''
       effortTarget.value = null
       open.value = true
-      document.addEventListener('mousedown', onDocumentMouseDown, true)
+      // The chat's own document (the popped-out chat has its own window)
+      listenDoc = root.value?.ownerDocument || document
+      listenDoc.addEventListener('mousedown', onDocumentMouseDown, true)
       await nextTick()
       search.value?.focus()
       load()
@@ -309,7 +313,8 @@ export default {
     function close() {
       open.value = false
       effortTarget.value = null
-      document.removeEventListener('mousedown', onDocumentMouseDown, true)
+      listenDoc?.removeEventListener('mousedown', onDocumentMouseDown, true)
+      listenDoc = null
     }
 
     // Show the effort step for a model that takes one
@@ -365,7 +370,7 @@ export default {
 
     const formatContext = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`)
 
-    onUnmounted(() => document.removeEventListener('mousedown', onDocumentMouseDown, true))
+    onUnmounted(() => listenDoc?.removeEventListener('mousedown', onDocumentMouseDown, true))
 
     return {
       root,

@@ -1,19 +1,25 @@
 <template>
   <aside
+    ref="panel"
     class="chat-panel"
-    :class="{ fullscreen, resizing, standalone }"
-    :style="fullscreen || standalone ? null : { width: `${width}px` }"
+    :class="{ fullscreen, resizing, standalone, popout }"
+    :style="fullscreen || standalone || popout ? null : { width: `${width}px` }"
     aria-label="Chat"
   >
     <div
-      v-if="!fullscreen && !standalone"
+      v-if="!fullscreen && !standalone && !popout"
       class="chat-resizer"
       title="Drag to resize"
       @mousedown.prevent="startResize"
       @dblclick="resetWidth"
     />
 
-    <header class="chat-header">
+    <!-- In the popped-out window (no frame) the header is the title bar -->
+    <header
+      class="chat-header"
+      :class="{ 'window-drag': popout && customTitleBar }"
+      @dblclick.self="popout && customTitleBar && $emit('window-maximize')"
+    >
       <div
         v-if="standalone"
         class="chat-title"
@@ -91,7 +97,31 @@
           ><path d="M8 3.5v9M3.5 8h9" /></svg>
         </button>
         <button
-          v-if="!standalone"
+          v-if="!standalone && !popout"
+          class="chat-icon-btn"
+          title="Pop out into its own window"
+          aria-label="Pop out"
+          @click="popOut"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M9.5 2.5h4v4M13.5 2.5L8 8M11.5 9.5v4h-9v-9h4" /></svg>
+        </button>
+        <button
+          v-if="popout"
+          class="chat-icon-btn"
+          title="Back into the main window"
+          aria-label="Dock"
+          @click="$emit('dock')"
+        >
+          <svg
+            viewBox="0 0 16 16"
+            aria-hidden="true"
+          ><path d="M13.5 2.5L8 8M8 4.5V8h3.5M6.5 2.5h-4v11h11v-4" /></svg>
+        </button>
+        <button
+          v-if="!standalone && !popout"
           class="chat-icon-btn"
           :title="fullscreen ? 'Exit full screen (Esc)' : 'Full screen'"
           @click="toggleFullscreen"
@@ -108,6 +138,7 @@
           ><path d="M6.5 3v3.5H3M9.5 3v3.5H13M6.5 13V9.5H3M9.5 13V9.5H13" /></svg>
         </button>
         <button
+          v-if="!popout"
           class="chat-icon-btn"
           :title="standalone ? 'Close chat' : 'Close chat (Ctrl+Shift+L)'"
           @click="$emit('close')"
@@ -117,6 +148,49 @@
             aria-hidden="true"
           ><path d="M4 4l8 8M12 4l-8 8" /></svg>
         </button>
+        <!-- Window buttons of the popped-out chat (Windows/Linux) -->
+        <template v-if="popout && customTitleBar">
+          <span class="chat-window-sep" />
+          <button
+            class="chat-icon-btn"
+            title="Minimize"
+            aria-label="Minimize"
+            @click="$emit('window-minimize')"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M3.5 8.5h9" /></svg>
+          </button>
+          <button
+            class="chat-icon-btn"
+            title="Maximize"
+            aria-label="Maximize"
+            @click="$emit('window-maximize')"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><rect
+              x="3.5"
+              y="3.5"
+              width="9"
+              height="9"
+              rx="1"
+            /></svg>
+          </button>
+          <button
+            class="chat-icon-btn chat-window-close"
+            title="Close (the chat goes back into the main window)"
+            aria-label="Close"
+            @click="$emit('window-close')"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            ><path d="M4 4l8 8M12 4l-8 8" /></svg>
+          </button>
+        </template>
       </div>
     </header>
 
@@ -484,7 +558,7 @@
 </template>
 
 <script>
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useStore } from 'vuex'
 import ChatMessage from './ChatMessage.vue'
 import ChatSessionList from './ChatSessionList.vue'
@@ -496,6 +570,7 @@ import { describePageRanges } from '../../utils/chatPrompt'
 import { contextClass, contextKindLabel, contextLocation, rangeToText } from '../../utils/contextChips'
 import { applyChatZoomAction, normalizeChatZoom } from '../../utils/chatZoom'
 import { imageFilesFrom, prepareImage } from '../../utils/chatImages'
+import { usesCustomTitleBar } from '../../../common/menuModel'
 
 const MIN_WIDTH = 300
 const DEFAULT_WIDTH = 420
@@ -507,13 +582,16 @@ export default {
 
   props: {
     // Standalone chat (no PDF): fills the window, one session per file
-    standalone: { type: Boolean, default: false }
+    standalone: { type: Boolean, default: false },
+    // Drawn in its own window (ChatPopout.vue)
+    popout: { type: Boolean, default: false }
   },
 
-  emits: ['close', 'open-settings', 'new-chat', 'save-as'],
+  emits: ['close', 'open-settings', 'new-chat', 'save-as', 'dock', 'window-minimize', 'window-maximize', 'window-close'],
 
   setup(props) {
     const store = useStore()
+    const panel = ref(null)
     const scroller = ref(null)
     const input = ref(null)
     const draft = ref('')
@@ -586,8 +664,10 @@ export default {
       store.dispatch('chat/setPendingContext', { kind: 'reply', messageId, turn, text })
     }
 
-    const captureSelection = () => {
-      const selection = window.getSelection()
+    // doc: where the selection is (the popped-out chat has its own document;
+    // PDF text is always in the main one)
+    const captureSelection = (doc = document) => {
+      const selection = doc.getSelection()
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) return
       const start = elementOf(selection.getRangeAt(0).startContainer)
       const answer = start?.closest('.chat-message-assistant .chat-answer')
@@ -609,11 +689,21 @@ export default {
     }
 
     let selectionTimer = null
-    const onSelectionChange = () => {
+    const onSelectionChange = (event) => {
+      const doc = event?.target?.nodeType === Node.DOCUMENT_NODE ? event.target : document
       clearTimeout(selectionTimer)
-      selectionTimer = setTimeout(captureSelection, 250)
+      selectionTimer = setTimeout(() => captureSelection(doc), 250)
     }
     document.addEventListener('selectionchange', onSelectionChange)
+    // The popped-out chat's document, for selections in replies there
+    let ownDocument = null
+    onMounted(() => {
+      const doc = panel.value?.ownerDocument
+      if (doc && doc !== document) {
+        ownDocument = doc
+        doc.addEventListener('selectionchange', onSelectionChange)
+      }
+    })
 
     // Selecting a note (with content) offers it as context too
     const findNotePage = (id) => {
@@ -650,7 +740,9 @@ export default {
     // without waiting for the selection delay, and attach it
     const attachSelectionNow = () => {
       clearTimeout(selectionTimer)
-      captureSelection()
+      // A reply selected in the popped-out window wins over the PDF selection
+      const ownSelection = ownDocument?.getSelection()
+      captureSelection(ownSelection && !ownSelection.isCollapsed ? ownDocument : document)
       if (pendingContext.value) attachContext()
     }
     window.addEventListener('chat:attach-selection', attachSelectionNow)
@@ -973,8 +1065,10 @@ export default {
       autoGrow()
     })
 
-    // --- Full screen -------------------------------------------------------
+    // --- Full screen / own window --------------------------------------------
     const toggleFullscreen = () => store.dispatch('chat/setFullscreen', !fullscreen.value)
+    const popOut = () => store.dispatch('chat/setPopout', true)
+    const customTitleBar = typeof process !== 'undefined' && usesCustomTitleBar(process.platform)
 
     // --- Resizing ----------------------------------------------------------
     const width = ref(store.state.settings.chat.panelWidth || DEFAULT_WIDTH)
@@ -1021,6 +1115,7 @@ export default {
 
     onUnmounted(() => {
       document.removeEventListener('selectionchange', onSelectionChange)
+      ownDocument?.removeEventListener('selectionchange', onSelectionChange)
       window.removeEventListener('chat:attach-selection', attachSelectionNow)
       window.removeEventListener('chat:report-selection', onReportSelection)
       window.removeEventListener('chat:zoom', onZoom)
@@ -1059,6 +1154,9 @@ export default {
     scrollToBottom()
 
     return {
+      panel,
+      popOut,
+      customTitleBar,
       attachedImages,
       previewImage,
       previewEl,
@@ -1167,11 +1265,34 @@ export default {
   border-left: none;
 }
 
-.chat-panel.standalone {
+.chat-panel.standalone,
+.chat-panel.popout {
   flex: 1;
   width: auto;
   min-width: 320px;
   border-left: none;
+}
+
+/* The popped-out chat's header doubles as its title bar */
+.chat-header.window-drag {
+  -webkit-app-region: drag;
+}
+
+.chat-header.window-drag button,
+.chat-header.window-drag :deep(button) {
+  -webkit-app-region: no-drag;
+}
+
+.chat-window-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 2px;
+  background: var(--border-color);
+}
+
+.chat-window-close:hover {
+  background: #e81123;
+  color: #fff;
 }
 
 .chat-commands {
@@ -1232,7 +1353,9 @@ export default {
 .chat-panel.fullscreen .chat-messages-inner,
 .chat-panel.fullscreen .chat-composer > *,
 .chat-panel.standalone .chat-messages-inner,
-.chat-panel.standalone .chat-composer > * {
+.chat-panel.standalone .chat-composer > *,
+.chat-panel.popout .chat-messages-inner,
+.chat-panel.popout .chat-composer > * {
   width: 100%;
   max-width: 820px;
   margin-left: auto;

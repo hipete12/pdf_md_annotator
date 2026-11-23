@@ -159,9 +159,12 @@ export default {
       if (target.closest?.('textarea, input, select, [contenteditable]:not([contenteditable="false"])')) emit('cancel')
     }
 
+    // The chat's own document (the popped-out chat has its own window)
+    let listenDoc = null
     onMounted(async () => {
-      document.addEventListener('mousedown', onDocumentMouseDown, true)
-      document.addEventListener('focusin', onDocumentFocusIn, true)
+      listenDoc = root.value?.ownerDocument || document
+      listenDoc.addEventListener('mousedown', onDocumentMouseDown, true)
+      listenDoc.addEventListener('focusin', onDocumentFocusIn, true)
       await nextTick()
       autoGrow()
       const el = input.value
@@ -172,8 +175,8 @@ export default {
     })
 
     onUnmounted(() => {
-      document.removeEventListener('mousedown', onDocumentMouseDown, true)
-      document.removeEventListener('focusin', onDocumentFocusIn, true)
+      listenDoc?.removeEventListener('mousedown', onDocumentMouseDown, true)
+      listenDoc?.removeEventListener('focusin', onDocumentFocusIn, true)
     })
 
     return { root, input, text, contexts, attachments, removeImage, canSubmit, autoGrow, submit, removeContext, onKeydown, contextClass, contextKindLabel, contextLocation }
