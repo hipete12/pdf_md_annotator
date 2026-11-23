@@ -87,6 +87,7 @@
 
 <script>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { fitTextarea } from '../../utils/fitTextarea'
 import { contextClass, contextKindLabel, contextLocation } from '../../utils/contextChips'
 
 export default {
@@ -107,12 +108,8 @@ export default {
 
     const canSubmit = computed(() => text.value.trim().length > 0 || contexts.value.length > 0 || attachments.value.length > 0)
 
-    const autoGrow = () => {
-      const el = input.value
-      if (!el) return
-      el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 240)}px`
-    }
+    // Up to the CSS max-height (see fitTextarea: zoom-safe, no stray scrollbar)
+    const autoGrow = () => fitTextarea(input.value)
 
     const submit = () => {
       if (canSubmit.value) emit('submit', { text: text.value, contexts: contexts.value, attachments: attachments.value })

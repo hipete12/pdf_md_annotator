@@ -1021,6 +1021,25 @@ ipcMain.on('chat-popout:toggle-maximize', () => {
   if (chatPopoutWindow.isMaximized()) chatPopoutWindow.unmaximize()
   else chatPopoutWindow.maximize()
 })
+// Ctrl+drag in the popped-out chat moves its window: positions are screen
+// coordinates of the pointer (DIPs, like window positions)
+let chatPopoutDrag = null
+ipcMain.on('chat-popout:drag-start', (event, point) => {
+  if (!chatPopoutWindow || chatPopoutWindow.isMaximized() || chatPopoutWindow.isFullScreen()) return
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return
+  const [x, y] = chatPopoutWindow.getPosition()
+  chatPopoutDrag = { pointer: point, window: { x, y } }
+})
+ipcMain.on('chat-popout:drag-move', (event, point) => {
+  if (!chatPopoutDrag || !chatPopoutWindow || chatPopoutWindow.isDestroyed()) return
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) return
+  chatPopoutWindow.setPosition(
+    Math.round(chatPopoutDrag.window.x + point.x - chatPopoutDrag.pointer.x),
+    Math.round(chatPopoutDrag.window.y + point.y - chatPopoutDrag.pointer.y)
+  )
+})
+ipcMain.on('chat-popout:drag-end', () => { chatPopoutDrag = null })
+
 ipcMain.on('chat-popout:focus', () => {
   if (!chatPopoutWindow) return
   if (chatPopoutWindow.isMinimized()) chatPopoutWindow.restore()

@@ -120,6 +120,33 @@ test.describe('Chat zoom', () => {
     await expect(pdfZoom()).toHaveText('100%')
   })
 
+  test('the message box stays one row without a scrollbar at every zoom level', async () => {
+    await launch({ chat: { panelVisible: true } }, [path.join(pdfDir, 'doc.pdf')])
+    await window.waitForSelector('.chat-input')
+    const box = () => window.locator('.chat-input').evaluate(el => ({
+      rows: el.rows,
+      overflow: getComputedStyle(el).overflowY,
+      fits: el.scrollHeight <= el.clientHeight
+    }))
+    await window.locator('.chat-input').focus()
+    // 75% ... 200% and back, the way Ctrl +/- step through them
+    for (const key of ['-', '-', '=', '=', '=', '=', '=', '=', '=', '=', '0']) {
+      await window.keyboard.press(`Control+${key}`)
+      expect(await box()).toEqual({ rows: 1, overflow: 'hidden', fits: true })
+    }
+
+    // It still grows with the text, and scrolls only past its maximum height
+    await window.keyboard.press('Control+=')
+    await window.keyboard.type('one')
+    for (let i = 0; i < 3; i++) await window.keyboard.press('Shift+Enter')
+    expect((await box()).rows).toBe(4)
+    for (let i = 0; i < 20; i++) await window.keyboard.press('Shift+Enter')
+    expect(await box()).toMatchObject({ overflow: 'auto' })
+    await window.locator('.chat-input').fill('')
+    await window.locator('.chat-input').dispatchEvent('input')
+    expect(await box()).toEqual({ rows: 1, overflow: 'hidden', fits: true })
+  })
+
   test('a standalone chat always zooms the chat and keeps the zoom', async () => {
     await launch({ chat: { zoom: 1.5 } })
     await window.locator('.welcome-card', { hasText: 'New chat' }).click()

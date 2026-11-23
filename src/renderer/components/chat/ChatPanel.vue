@@ -571,6 +571,7 @@ import { contextClass, contextKindLabel, contextLocation, rangeToText } from '..
 import { applyChatZoomAction, normalizeChatZoom } from '../../utils/chatZoom'
 import { imageFilesFrom, prepareImage } from '../../utils/chatImages'
 import { usesCustomTitleBar } from '../../../common/menuModel'
+import { fitTextarea } from '../../utils/fitTextarea'
 
 const MIN_WIDTH = 300
 const DEFAULT_WIDTH = 420
@@ -698,6 +699,7 @@ export default {
     // The popped-out chat's document, for selections in replies there
     let ownDocument = null
     onMounted(() => {
+      autoGrow()
       const doc = panel.value?.ownerDocument
       if (doc && doc !== document) {
         ownDocument = doc
@@ -821,12 +823,8 @@ export default {
     const chatPath = computed(() => store.state.chatPath)
 
     // --- Sending -----------------------------------------------------------
-    const autoGrow = () => {
-      const el = input.value
-      if (!el) return
-      el.style.height = 'auto'
-      el.style.height = `${Math.min(el.scrollHeight, 200)}px`
-    }
+    // Up to the CSS max-height (see fitTextarea: zoom-safe, no stray scrollbar)
+    const autoGrow = () => fitTextarea(input.value)
 
     // --- Slash commands (standalone chats) ----------------------------------
     const commandIndex = ref(0)
