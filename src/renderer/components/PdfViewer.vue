@@ -1,5 +1,10 @@
 <template>
-  <div class="pdf-viewer" ref="viewerContainer" @scroll="handleScroll">
+  <div
+    ref="viewerContainer"
+    class="pdf-viewer"
+    @scroll="handleScroll"
+    @mouseup="handleViewerMouseUp"
+  >
     <div class="pdf-pages-container">
       <div 
         v-for="pageNum in orderedPages"
@@ -14,6 +19,26 @@
           :ref="el => setCanvasRef(el, pageNum)" 
           class="pdf-canvas"
         ></canvas>
+
+        <!-- Text highlights: above the page image, below the text layer -->
+        <div
+          v-if="shouldRenderCanvas(pageNum) && getPageHighlights(pageNum).length"
+          class="highlight-layer"
+          aria-hidden="true"
+        >
+          <template
+            v-for="highlight in getPageHighlights(pageNum)"
+            :key="highlight.id"
+          >
+            <div
+              v-for="(rect, index) in highlight.rects"
+              :key="index"
+              class="pdf-highlight"
+              :data-highlight-id="highlight.id"
+              :style="getHighlightRectStyle(rect, highlight.color)"
+            />
+          </template>
+        </div>
 
         <div
           v-if="shouldRenderTextLayer(pageNum)"
@@ -32,6 +57,16 @@
             @delete="deleteAnnotation"
           />
         </div>
+
+        <HighlightMenu
+          v-if="highlightMenu && highlightMenu.pageId === pageNum"
+          :style="highlightMenuStyle"
+          :mode="highlightMenu.mode"
+          :color="highlightMenu.color"
+          :can-remove="highlightMenu.canRemove"
+          @pick="pickHighlightColor"
+          @remove="removeMenuHighlights"
+        />
       </div>
     </div>
   </div>
@@ -42,6 +77,8 @@ import { ref, computed, nextTick, watch, onMounted, onUnmounted, shallowRef } fr
 import { useStore } from 'vuex'
 import { TextLayer } from 'pdfjs-dist'
 import AnnotationBox from './AnnotationBox.vue'
+import HighlightMenu from './HighlightMenu.vue'
+import { highlightAt, mergeLineRects, overlappingHighlights } from '../utils/highlights'
 import { highlightTextDivs, restoreTextDivs } from '../utils/pdfSearch'
 
 const MAX_CANVAS_SIZE = 16384
@@ -59,7 +96,8 @@ export default {
   name: 'PdfViewer',
   
   components: {
-    AnnotationBox
+    AnnotationBox,
+    HighlightMenu
   },
   
   setup() {
@@ -319,6 +357,171 @@ export default {
       if (container) {
         container.replaceChildren()
       }
+    }
+
+    // --- Text highlights (see utils/highlights.js) ---------------------------
+    const getPageHighlights = (pageNum) => store.state.highlights[pageNum] || []
+
+    const getHighlightRectStyle = (rect, color) => {
+      const scale = displayScale.value
+      return {
+        left: `${rect.x * scale}px`,
+        top: `${rect.y * scale}px`,
+        width: `${rect.w * scale}px`,
+        height: `${rect.h * scale}px`,
+        backgroundColor: color
+      }
+    }
+
+    // Selected PDF text as [{ pageId, rects, text }], rectangles in page
+    // units; text outside the text layers (notes) is left out
+    const getSelectionTargets = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0) return []
+      const range = selection.getRangeAt(0)
+      const common = range.commonAncestorContainer
+      const root = common.nodeType === Node.ELEMENT_NODE ? common : common.parentElement
+      if (!root || !viewerContainer.value?.contains(root)) return []
+
+      const scale = displayScale.value
+      const byPage = new Map()
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!range.intersectsNode(node)) continue
+        const parent = node.parentElement
+        const wrapper = parent?.closest('.textLayer')?.closest('.pdf-page-wrapper')
+        if (!wrapper) continue
+        const start = node === range.startContainer ? range.startOffset : 0
+        const end = node === range.endContainer ? range.endOffset : node.length
+        if (end <= start) continue
+
+        const pageId = Number(wrapper.dataset.page)
+        if (!byPage.has(pageId)) byPage.set(pageId, { pageId, rects: [], text: '' })
+        const entry = byPage.get(pageId)
+        const origin = wrapper.getBoundingClientRect()
+        const part = document.createRange()
+        part.setStart(node, start)
+        part.setEnd(node, end)
+        for (const r of part.getClientRects()) {
+          entry.rects.push({ x: (r.left - origin.left) / scale, y: (r.top - origin.top) / scale, w: r.width / scale, h: r.height / scale })
+        }
+        // Text layer spans end a line with a <br>
+        const textSpan = parent.classList.contains('search-hit') ? parent.parentElement : parent
+        entry.text += node.textContent.slice(start, end)
+        if (end === node.length && textSpan.nextSibling?.nodeName === 'BR') entry.text += '\n'
+      }
+      return [...byPage.values()]
+        .map(entry => ({ ...entry, rects: mergeLineRects(entry.rects), text: entry.text.replace(/[ \t]+/g, ' ').trim() }))
+        .filter(entry => entry.rects.length)
+    }
+
+    // Menu shown under selected text or a clicked highlight:
+    // { mode, pageId, x, y (page units), targets, ids, color, canRemove }
+    const highlightMenu = ref(null)
+    const closeHighlightMenu = () => { highlightMenu.value = null }
+
+    const highlightMenuStyle = computed(() => {
+      const menu = highlightMenu.value
+      if (!menu) return null
+      void layoutVersion.value
+      const scale = displayScale.value
+      const pageWidth = (pageMetrics.get(menu.pageId)?.width ?? estimatedWidth) * scale
+      return {
+        left: `${Math.max(4, Math.min(menu.x * scale, pageWidth - 330))}px`,
+        top: `${menu.y * scale + 6}px`
+      }
+    })
+
+    const openSelectionMenu = (targets) => {
+      const last = targets[targets.length - 1]
+      const rect = last.rects[last.rects.length - 1]
+      const overlapped = targets.flatMap(t => overlappingHighlights(getPageHighlights(t.pageId), t.rects))
+      highlightMenu.value = {
+        mode: 'selection',
+        pageId: last.pageId,
+        x: rect.x,
+        y: rect.y + rect.h,
+        targets,
+        ids: overlapped.map(h => h.id),
+        color: store.state.settings.ui.highlightColor,
+        canRemove: overlapped.length > 0
+      }
+    }
+
+    // After a mouse selection, or a click on a highlight, show the menu
+    const handleViewerMouseUp = (event) => {
+      if (event.button !== 0) return
+      if (event.target.closest?.('.highlight-menu, .annotation-box, .style-panel')) return
+      const { clientX, clientY } = event
+      const wrapper = event.target.closest?.('.pdf-page-wrapper')
+      // Let the selection settle first (e.g. a double-clicked word)
+      setTimeout(() => {
+        const targets = getSelectionTargets()
+        if (targets.length) {
+          openSelectionMenu(targets)
+          return
+        }
+        if (!wrapper) return closeHighlightMenu()
+        const pageId = Number(wrapper.dataset.page)
+        const origin = wrapper.getBoundingClientRect()
+        const scale = displayScale.value
+        const hit = highlightAt(getPageHighlights(pageId), (clientX - origin.left) / scale, (clientY - origin.top) / scale)
+        if (!hit) return closeHighlightMenu()
+        highlightMenu.value = {
+          mode: 'highlight',
+          pageId,
+          x: hit.rect.x,
+          y: hit.rect.y + hit.rect.h,
+          targets: [],
+          ids: [hit.highlight.id],
+          color: hit.highlight.color,
+          canRemove: true
+        }
+      }, 0)
+    }
+
+    const pickHighlightColor = (color) => {
+      const menu = highlightMenu.value
+      if (!menu) return
+      store.dispatch('setHighlightColor', color)
+      if (menu.mode === 'selection') {
+        store.dispatch('highlightTargets', { targets: menu.targets, color })
+        window.getSelection()?.removeAllRanges()
+      } else {
+        store.dispatch('recolorHighlights', { ids: menu.ids, color })
+      }
+      closeHighlightMenu()
+    }
+
+    const removeMenuHighlights = () => {
+      const menu = highlightMenu.value
+      if (!menu) return
+      store.dispatch('removeHighlights', menu.ids)
+      if (menu.mode === 'selection') window.getSelection()?.removeAllRanges()
+      closeHighlightMenu()
+    }
+
+    // Ctrl+Shift+H (Edit > Highlight Selection): remove the highlights in the
+    // selection if there are any, otherwise highlight it
+    const toggleSelectionHighlight = () => {
+      const targets = getSelectionTargets()
+      if (!targets.length) {
+        if (highlightMenu.value?.mode === 'highlight') removeMenuHighlights()
+        return
+      }
+      const overlapped = targets.flatMap(t => overlappingHighlights(getPageHighlights(t.pageId), t.rects))
+      if (overlapped.length) store.dispatch('removeHighlights', overlapped.map(h => h.id))
+      else store.dispatch('highlightTargets', { targets })
+      window.getSelection()?.removeAllRanges()
+      closeHighlightMenu()
+    }
+
+    // Close the menu on a press anywhere else, and on Esc
+    const onDocumentMouseDown = (event) => {
+      if (highlightMenu.value && !event.target.closest?.('.highlight-menu')) closeHighlightMenu()
+    }
+    const onDocumentKeyDown = (event) => {
+      if (event.key === 'Escape' && highlightMenu.value) closeHighlightMenu()
     }
 
     // --- Find (search bar, see store/search.js) ------------------------------
@@ -710,6 +913,7 @@ export default {
           target.closest('.annotation-actions') ||
           target.closest('.annotation-action-button') ||
           target.closest('.style-panel') ||
+          target.closest('.highlight-menu') ||
           target.closest('.textLayer span') ||
           target.closest('button') ||
           target.closest('input') ||
@@ -767,6 +971,7 @@ export default {
       baseViewports.clear()
       highlightedDivs.clear()
       pendingReveal = null
+      closeHighlightMenu()
       clearTimeout(textScaleUpdateTimeout)
       textScaleUpdateTimeout = null
       pageMetrics.clear()
@@ -787,6 +992,7 @@ export default {
     })
 
     watch(orderedPages, () => {
+      closeHighlightMenu()
       bumpGeneration()
       resetRenderState()
       // Drop metrics and canvas refs for pages that no longer exist (deletion/reorder)
@@ -842,6 +1048,9 @@ export default {
     
     onMounted(() => {
       document.addEventListener('click', handleClickOutside)
+      document.addEventListener('mousedown', onDocumentMouseDown, true)
+      document.addEventListener('keydown', onDocumentKeyDown)
+      window.addEventListener('pdf:toggle-highlight', toggleSelectionHighlight)
       window.addEventListener('resize', handleResize)
       if (viewerContainer.value) {
         viewerContainer.value.addEventListener('wheel', handleWheel, { passive: false })
@@ -861,6 +1070,9 @@ export default {
       cancelAllRenders()
       cancelAllTextLayers()
       document.removeEventListener('click', handleClickOutside)
+      document.removeEventListener('mousedown', onDocumentMouseDown, true)
+      document.removeEventListener('keydown', onDocumentKeyDown)
+      window.removeEventListener('pdf:toggle-highlight', toggleSelectionHighlight)
       window.removeEventListener('resize', handleResize)
       if (viewerContainer.value) {
         viewerContainer.value.removeEventListener('wheel', handleWheel)
@@ -871,6 +1083,13 @@ export default {
     })
 
     return {
+      getPageHighlights,
+      getHighlightRectStyle,
+      highlightMenu,
+      highlightMenuStyle,
+      handleViewerMouseUp,
+      pickHighlightColor,
+      removeMenuHighlights,
       viewerContainer,
       displayScale,
       orderedPages,

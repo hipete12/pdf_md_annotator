@@ -24,6 +24,10 @@ conversation into a Quarto document.
   - Custom macros via `\newcommand`
   - Error display for invalid LaTeX
 - **Code Highlighting**: Syntax highlighting for 20+ programming languages
+- **Text highlights**: select text on the page and pick a colour (or press `Ctrl+Shift+H`)
+  - Six colours plus any custom colour; the last one you pick is used for the next highlight
+  - Click a highlight to change its colour or remove it; selecting highlighted text and pressing `Ctrl+Shift+H` removes it
+  - Highlighting across an existing highlight extends it; undo/redo work; saved in the `.pdfmark`
 - **Find** (`Ctrl+F`): search the PDF's text on every page, with all matches highlighted
   - `Enter` / `Shift+Enter` (or `F3` / `Shift+F3`) move to the next / previous match, wrapping around
   - Starts from the text selected on the page; ignores case and line breaks
@@ -43,6 +47,7 @@ conversation into a Quarto document.
   - `Ctrl+I`: Italic
   - `Ctrl+U`: Underline
   - `Ctrl+H`: Hide/show annotation
+  - `Ctrl+Shift+H`: Highlight the selected PDF text (or remove its highlight)
   - `Ctrl+S`: Save
   - `Ctrl+Shift+S`: Save As (copies the PDF and its annotations to a new name)
   - `Ctrl+O`: Open a PDF or a chat

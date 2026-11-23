@@ -7,6 +7,7 @@ import {
 } from '../../common/llm'
 import { createChatModule, createChatPlugin } from './chat'
 import { createSearchModule } from './search'
+import { normalizeColor, planHighlight, sanitizeHighlights } from '../utils/highlights'
 
 // Safely get ipcRenderer - may not be available in browser context
 let defaultIpcRenderer = null
@@ -43,6 +44,7 @@ function snapshotPdfmark(state, commit) {
     created: state.pdfmarkCreated,
     modified: now,
     annotations: state.annotations,
+    highlights: state.highlights,
     pageOrder: state.pageOrder,
     deletedPages: state.deletedPages,
     concatenatedPdfs: state.concatenatedPdfs,
@@ -117,6 +119,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
     
       // Annotations
       annotations: {}, // { pageIndex: [annotation, ...] }
+      highlights: {}, // { pageIndex: [highlight, ...] } (see utils/highlights.js)
       selectedAnnotation: null,
     
       // Settings
@@ -226,6 +229,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
         state.pageOrder = Array.from({ length: document.numPages }, (_, i) => i + 1)
         state.deletedPages = []
         state.annotations = {}
+        state.highlights = {}
         state.concatenatedPdfs = []
         state.additionalPdfs = {}
         state.currentPage = 1
@@ -247,6 +251,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
         state.pageOrder = []
         state.deletedPages = []
         state.annotations = {}
+        state.highlights = {}
         state.concatenatedPdfs = []
         state.additionalPdfs = {}
         state.selectedAnnotation = null
@@ -383,6 +388,7 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
       LOAD_ANNOTATIONS(state, data) {
         if (data) {
           state.annotations = data.annotations || {}
+          state.highlights = sanitizeHighlights(data.highlights)
           state.pageOrder = data.pageOrder || state.pageOrder
           state.deletedPages = data.deletedPages || []
           state.pdfmarkVersion = data.version || '1.0.0'
@@ -435,6 +441,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
             shiftedAnnotations[parseInt(pageKey) + pageCount] = annotations
           }
           state.annotations = shiftedAnnotations
+          const shiftedHighlights = {}
+          for (const [pageKey, highlights] of Object.entries(state.highlights)) {
+            shiftedHighlights[parseInt(pageKey) + pageCount] = highlights
+          }
+          state.highlights = shiftedHighlights
         
           // Shift deleted pages
           state.deletedPages = state.deletedPages.map(p => p + pageCount)
@@ -516,6 +527,27 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
         state.isDirty = true
       },
     
+      // Text highlights: add [{ pageId, highlight }] / remove by id
+      INSERT_HIGHLIGHTS(state, items) {
+        for (const { pageId, highlight } of items) {
+          if (!state.highlights[pageId]) state.highlights[pageId] = []
+          state.highlights[pageId].push(clone(highlight))
+        }
+        if (items.length) state.isDirty = true
+      },
+
+      REMOVE_HIGHLIGHTS(state, ids) {
+        const remove = new Set(ids)
+        if (!remove.size) return
+        for (const [pageId, list] of Object.entries(state.highlights)) {
+          const kept = list.filter(h => !remove.has(h.id))
+          if (kept.length === list.length) continue
+          if (kept.length) state.highlights[pageId] = kept
+          else delete state.highlights[pageId]
+        }
+        state.isDirty = true
+      },
+
       // Undo/Redo mutations
       // Record a new user action; this invalidates anything that could be redone
       PUSH_UNDO(state, action) {
@@ -702,6 +734,64 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
         dispatch('autoSave')
       },
     
+      // Replace highlights in one undoable step: removed / added are
+      // [{ pageId, highlight }] (adding, removing and recoloring are all this)
+      replaceHighlights({ commit, dispatch }, { removed = [], added = [] }) {
+        if (!removed.length && !added.length) return
+        commit('REMOVE_HIGHLIGHTS', removed.map(item => item.highlight.id))
+        commit('INSERT_HIGHLIGHTS', added)
+        commit('PUSH_UNDO', { type: 'REPLACE_HIGHLIGHTS', removed: clone(removed), added: clone(added) })
+        dispatch('autoSave')
+      },
+
+      // Highlight selected text: targets = [{ pageId, rects, text }] (page units)
+      highlightTargets({ state, dispatch }, { targets, color }) {
+        const value = normalizeColor(color || state.settings.ui.highlightColor)
+        const { removed, added } = planHighlight(state.highlights, targets)
+        const created = new Date().toISOString()
+        return dispatch('replaceHighlights', {
+          removed,
+          added: added.map(({ pageId, rects, text }) => ({
+            pageId,
+            highlight: { id: uuidv4(), color: value, rects, text, created }
+          }))
+        })
+      },
+
+      removeHighlights({ state, dispatch }, ids) {
+        const wanted = new Set(ids)
+        const removed = []
+        for (const [pageId, list] of Object.entries(state.highlights)) {
+          for (const highlight of list) {
+            if (wanted.has(highlight.id)) removed.push({ pageId: Number(pageId), highlight })
+          }
+        }
+        return dispatch('replaceHighlights', { removed })
+      },
+
+      recolorHighlights({ state, dispatch }, { ids, color }) {
+        const value = normalizeColor(color)
+        const wanted = new Set(ids)
+        const removed = []
+        for (const [pageId, list] of Object.entries(state.highlights)) {
+          for (const highlight of list) {
+            if (wanted.has(highlight.id) && highlight.color !== value) removed.push({ pageId: Number(pageId), highlight })
+          }
+        }
+        return dispatch('replaceHighlights', {
+          removed,
+          added: removed.map(({ pageId, highlight }) => ({ pageId, highlight: { ...highlight, color: value } }))
+        })
+      },
+
+      // Remember the colour picked for new highlights
+      setHighlightColor({ commit, dispatch, state }, color) {
+        const value = normalizeColor(color)
+        if (state.settings.ui.highlightColor === value) return
+        commit('SET_SETTING', { path: 'ui.highlightColor', value })
+        dispatch('saveSettings')
+      },
+
       // Undo action
       undo({ commit, dispatch, state }) {
         if (state.undoStack.length === 0) return
@@ -730,6 +820,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
               pageIndex: action.pageIndex,
               annotation: action.annotation
             })
+            break
+
+          case 'REPLACE_HIGHLIGHTS':
+            commit('REMOVE_HIGHLIGHTS', action.added.map(item => item.highlight.id))
+            commit('INSERT_HIGHLIGHTS', action.removed)
             break
         }
       
@@ -764,6 +859,11 @@ export function createAppStore({ ipcRenderer = defaultIpcRenderer, renderPageIma
           case 'DELETE_ANNOTATION':
             // Redo delete = delete again
             commit('DELETE_ANNOTATION', action.annotation.id)
+            break
+
+          case 'REPLACE_HIGHLIGHTS':
+            commit('REMOVE_HIGHLIGHTS', action.removed.map(item => item.highlight.id))
+            commit('INSERT_HIGHLIGHTS', action.added)
             break
         }
       

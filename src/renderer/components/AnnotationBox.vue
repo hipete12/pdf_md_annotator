@@ -350,7 +350,8 @@ export default {
         return
       }
       
-      if (e.ctrlKey && e.key.toLowerCase() === 'h') {
+      // Ctrl+H only: Ctrl+Shift+H highlights the selected PDF text
+      if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'h') {
         e.preventDefault()
         
         if (props.annotation.isCollapsed) {
